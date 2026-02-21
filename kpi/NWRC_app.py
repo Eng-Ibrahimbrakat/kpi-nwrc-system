@@ -11,7 +11,7 @@ st.set_page_config(
     page_title="نظام مؤشرات الأداء - المركز القومي لبحوث المياه",
     layout="wide"
 )
-st.image("/workspaces/kpi-nwrc-system/kpi/logo.png", width=180)
+st.image("logo.png", width=180)
 # =====================================
 # RTL عربي كامل
 # =====================================
