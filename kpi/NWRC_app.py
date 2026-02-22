@@ -1,16 +1,23 @@
-import streamlit as st
-import pandas as pd
-import os
+
 #python -m streamlit run "/workspaces/kpi-nwrc-system/kpi/NWRC_app.py"
 #streamlit run "D:/NWRC/NWRC_app.py"--server.address 0.0.0.0
 #streamlit run "D:/NWRC/NWRC_app.py" --server.port 8501 --server.address 0.0.0.0
 # =====================================
 # إعداد الصفحة
 # =====================================
+import streamlit as st
+import pandas as pd
+import os
+
 st.set_page_config(
     page_title="نظام مؤشرات الأداء - المركز القومي لبحوث المياه",
     layout="wide"
 )
+
+# ====== تحديد مسار الشعار ======
+current_dir = os.path.dirname(__file__)
+logo_path = os.path.join(current_dir, "logo.png")
+
 st.image(logo_path, width=180)
 # =====================================
 # RTL عربي كامل
