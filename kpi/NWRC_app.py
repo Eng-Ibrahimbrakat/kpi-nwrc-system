@@ -7,6 +7,18 @@ import pandas as pd
 import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+def connect_to_gsheet():
+    scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+    ]
+    credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+        st.secrets["gcp_service_account"], scope
+    )
+    client = gspread.authorize(credentials)
+    sheet = client.open("KPI_Data").sheet1  # اسم الشيت
+    return sheet
+       
 
 st.set_page_config(
     page_title="نظام مؤشرات الأداء - المركز القومي لبحوث المياه",
@@ -125,40 +137,24 @@ else:
         data["بالوزارة"] = st.number_input("عدد الاجتماعات بالوزارة", min_value=0)
         data["بالمركز"] = st.number_input("عدد الاجتماعات بالمركز", min_value=0)
         data["جهات خارجية"] = st.number_input("عدد الاجتماعات مع جهات خارجية", min_value=0)
-def connect_to_gsheet():
-  
-   scope = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive"
-    ]
-
-    credentials = ServiceAccountCredentials.from_json_keyfile_dict(
-        st.secrets["gcp_service_account"], scope
-    )
-
-    client = gspread.authorize(credentials)
-    sheet = client.open("KPI_Data").sheet1  # اسم الشيت
-
-    return sheet
-       
     
-# حفظ
-if st.button("حفظ البيانات"):
+    # حفظ
+    if st.button("حفظ البيانات"):
+        
+        df_new = pd.DataFrame([data])
+        df_new["المعهد"] = st.session_state.institute
+        df_new["المستخدم"] = st.session_state.username
+        df_new["الشهر"] = month
+        df_new["السنة"] = year
     
-    df_new = pd.DataFrame([data])
-    df_new["المعهد"] = st.session_state.institute
-    df_new["المستخدم"] = st.session_state.username
-    df_new["الشهر"] = month
-    df_new["السنة"] = year
-
-    sheet = connect_to_gsheet()
-
-    # لو الشيت فاضي → نضيف headers
-    if len(sheet.get_all_values()) == 0:
-        sheet.append_row(df_new.columns.tolist())
-
-    # إضافة البيانات
-    sheet.append_row(df_new.iloc[0].tolist())
-
-st.success("تم حفظ البيانات في Google Sheets ✅")
-    st.success("تم حفظ البيانات بنجاح ✅")
+        sheet = connect_to_gsheet()
+    
+        # لو الشيت فاضي → نضيف headers
+        if len(sheet.get_all_values()) == 0:
+            sheet.append_row(df_new.columns.tolist())
+    
+        # إضافة البيانات
+        sheet.append_row(df_new.iloc[0].tolist())
+    
+    st.success("تم حفظ البيانات في Google Sheets ✅")
+        st.success("تم حفظ البيانات بنجاح ✅")
