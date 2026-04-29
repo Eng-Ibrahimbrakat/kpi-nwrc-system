@@ -1,3 +1,10 @@
+
+#python -m streamlit run "/workspaces/kpi-nwrc-system/kpi/NWRC_app.py"
+#streamlit run "D:/NWRC/NWRC_app.py"--server.address 0.0.0.0
+#streamlit run "D:/NWRC/NWRC_app.py" --server.port 8501 --server.address 0.0.0.0
+# =====================================
+# إعداد الصفحة
+# =====================================
 import streamlit as st
 import pandas as pd
 import os
