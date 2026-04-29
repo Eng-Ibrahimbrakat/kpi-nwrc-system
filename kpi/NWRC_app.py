@@ -140,21 +140,18 @@ else:
     
     # حفظ
     if st.button("حفظ البيانات"):
-        
-        df_new = pd.DataFrame([data])
-        df_new["المعهد"] = st.session_state.institute
-        df_new["المستخدم"] = st.session_state.username
-        df_new["الشهر"] = month
-        df_new["السنة"] = year
-    
-        sheet = connect_to_gsheet()
-    
-        # لو الشيت فاضي → نضيف headers
-        if len(sheet.get_all_values()) == 0:
-            sheet.append_row(df_new.columns.tolist())
-    
-        # إضافة البيانات
-        sheet.append_row(df_new.iloc[0].tolist())
-    
-    st.success("تم حفظ البيانات في Google Sheets ✅")
+
+    df_new = pd.DataFrame([data])
+    df_new["المعهد"] = st.session_state.institute
+    df_new["المستخدم"] = st.session_state.username
+    df_new["الشهر"] = month
+    df_new["السنة"] = year
+
+    sheet = connect_to_gsheet()
+
+    if len(sheet.get_all_values()) == 0:
+        sheet.append_row(df_new.columns.tolist())
+
+    sheet.append_row(df_new.iloc[0].tolist())
+
     st.success("تم حفظ البيانات بنجاح ✅")
