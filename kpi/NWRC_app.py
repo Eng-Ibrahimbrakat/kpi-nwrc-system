@@ -142,7 +142,7 @@ else:
         data["جهات خارجية"] = st.number_input("عدد الاجتماعات مع جهات خارجية", min_value=0)
     
     # حفظ
-    if st.button("حفظ البيانات"):
+    if st.button("حفظ البيانات"):            
         df_new = pd.DataFrame([data])
         df_new["المعهد"] = st.session_state.institute
         df_new["المستخدم"] = st.session_state.username
@@ -151,12 +151,18 @@ else:
     
         sheet = connect_to_gsheet()
     
-        if len(sheet.get_all_values()) == 0:
-            sheet.append_row(df_new.columns.tolist())
+        if sheet is not None:
     
-        sheet.append_row(df_new.iloc[0].tolist())
+            if len(sheet.get_all_values()) == 0:
+                sheet.append_row(df_new.columns.tolist())
     
-        st.success("تم حفظ البيانات بنجاح ✅")
+            # ✅ تحويل القيم لنصوص
+            row = df_new.iloc[0].astype(str).tolist()
+    
+            sheet.append_row(row)
+    
+            st.success("تم حفظ البيانات بنجاح ✅")
+
 
         
 
