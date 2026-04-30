@@ -108,7 +108,7 @@ else:
     if st.session_state.role == "admin":
         page = st.sidebar.radio("اختر الصفحة", ["📊 Dashboard", "📄 البيانات"])
     else:
-        page = st.sidebar.radio("اختر الصفحة", ["📥 إدخال البيانات", "📊 Dashboard", "📄 البيانات"]])
+        page = st.sidebar.radio("اختر الصفحة", ["📥 إدخال البيانات", "📊 Dashboard", "📄 البيانات"])
     # ==============================
     # الإدخال
     # ==============================
