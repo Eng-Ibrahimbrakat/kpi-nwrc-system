@@ -215,15 +215,17 @@ else:
     # ==============================
     # عرض + تحميل
     # ==============================
-    from io import BytesIO
-
-    def to_excel(df):
-        output = BytesIO()
-        df.to_excel(output, index=False)
-        return output.getvalue()
-
-    st.download_button(
-        "📥 تحميل Excel",
-        to_excel(df),
-        "kpi_data.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with tab_data:
+         
+        from io import BytesIO
+    
+        def to_excel(df):
+            output = BytesIO()
+            df.to_excel(output, index=False)
+            return output.getvalue()
+    
+        st.download_button(
+            "📥 تحميل Excel",
+            to_excel(df),
+            "kpi_data.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
