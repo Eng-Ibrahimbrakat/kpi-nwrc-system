@@ -104,11 +104,11 @@ else:
     # ==============================
     # Tabs
     # ==============================
-    tab1, tab2, tab3 = st.tabs(["📥 إدخال البيانات", "📊 Dashboard", "📄 البيانات"])
+    
     if st.session_state.role == "admin":
-        page = st.sidebar.radio("اختر الصفحة", ["📊 Dashboard", "📄 البيانات"])
+        tab1, tab2 = st.tabs(["📊 Dashboard", "📄 البيانات"])
     else:
-        page = st.sidebar.radio("اختر الصفحة", ["📥 إدخال البيانات", "📊 Dashboard", "📄 البيانات"])
+        tab1, tab2, tab3 = st.tabs(["📥 إدخال البيانات", "📊 Dashboard", "📄 البيانات"])
     # ==============================
     # الإدخال
     # ==============================
