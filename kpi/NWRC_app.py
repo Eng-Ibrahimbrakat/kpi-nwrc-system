@@ -168,26 +168,45 @@ else:
     # ==============================
     with tab2:
 
-        st.subheader("📊 Dashboard")
+        st.title("📊 Dashboard")
 
-        if not df.empty:
-
-            # مجموع الدراسات
-            df["إجمالي الدراسات"] = (
-                df["دراسات خطة"].astype(int) +
-                df["دراسات استشارية"].astype(int) +
-                df["تمويل ذاتي"].astype(int)
-            )
-
-            st.bar_chart(df.groupby("المعهد")["إجمالي الدراسات"].sum())
-
-            # مقارنة المدير
-            if st.session_state.role == "admin":
-                st.write("مقارنة بين المعاهد")
-                st.bar_chart(df.groupby("المعهد")["متدربين"].sum())
-
-        else:
-            st.info("لا توجد بيانات")
+    if not df.empty:
+    
+        # تحويل القيم لأرقام
+        cols = ["تقارير مرحلية","تقارير نهائية","متدربين","مدربين",
+                "اجتماعات وزارة","اجتماعات مركز","اجتماعات خارجية"]
+    
+        for c in cols:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+    
+        # حساب الإجماليات
+        df["إجمالي التقارير"] = df["تقارير مرحلية"] + df["تقارير نهائية"]
+        df["إجمالي الاجتماعات"] = df["اجتماعات وزارة"] + df["اجتماعات مركز"] + df["اجتماعات خارجية"]
+    
+        # KPI Cards
+        col1, col2, col3, col4 = st.columns(4)
+    
+        col1.metric("📄 التقارير", int(df["إجمالي التقارير"].sum()))
+        col2.metric("👨‍🏫 المدربين", int(df["مدربين"].sum()))
+        col3.metric("👨‍🎓 المتدربين", int(df["متدربين"].sum()))
+        col4.metric("📅 الاجتماعات", int(df["إجمالي الاجتماعات"].sum()))
+    
+        st.divider()
+    
+        # الرسوم
+        import plotly.express as px
+    
+        fig1 = px.bar(df, x="المعهد", y="إجمالي التقارير", color="المعهد", title="التقارير")
+        st.plotly_chart(fig1, use_container_width=True)
+    
+        fig2 = px.bar(df, x="المعهد", y="متدربين", color="المعهد", title="التدريب")
+        st.plotly_chart(fig2, use_container_width=True)
+    
+        fig3 = px.bar(df, x="المعهد", y="إجمالي الاجتماعات", color="المعهد", title="الاجتماعات")
+        st.plotly_chart(fig3, use_container_width=True)
+    
+    else:
+        st.info("لا توجد بيانات")
 
     # ==============================
     # عرض البيانات + تحميل
