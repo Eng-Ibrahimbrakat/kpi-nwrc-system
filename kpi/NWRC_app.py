@@ -106,7 +106,7 @@ else:
     # ==============================
     
     if st.session_state.role == "admin":
-        tab1, tab2 = st.tabs(["📊 Dashboard", "📄 البيانات"])
+        tab2, tab3 = st.tabs(["📊 Dashboard", "📄 البيانات"])
     else:
         tab1, tab2, tab3 = st.tabs(["📥 إدخال البيانات", "📊 Dashboard", "📄 البيانات"])
     # ==============================
