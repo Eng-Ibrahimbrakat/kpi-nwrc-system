@@ -19,7 +19,7 @@ def connect_to_gsheet():
         st.secrets["gcp_service_account"], scope
     )
     client = gspread.authorize(credentials)
-    sheet = client.open("1QSfmNo9U0TNvdwRgLhLBgVNZbiL8wVcoWlffBz6cSfg").sheet1  # اسم الشيت
+    sheet = client.open_by_key("1QSfmNo9U0TNvdwRgLhLBgVNZbiL8wVcoWlffBz6cSfg").sheet1  # اسم الشيت
     return sheet
        
 
