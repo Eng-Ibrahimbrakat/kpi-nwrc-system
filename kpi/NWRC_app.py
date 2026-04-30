@@ -117,9 +117,9 @@ else:
 
     # Tabs
     if st.session_state.role == "admin":
-        tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📈 التغير الشهري", "📄 البيانات"])
+        tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📈 Dashboard الشهري", "📄 البيانات"])
     else:
-        tab1, tab2, tab3, tab4 = st.tabs(["📥 إدخال", "📊 Dashboard", "📈 التغير الشهري", "📄 البيانات"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📥 إدخال", "📊 Dashboard", "📈 Dashboard الشهري", "📄 البيانات"])
 
     # =========================
     # الإدخال
@@ -136,15 +136,15 @@ else:
 
             data_input = {
                 "دراسات خطة": st.number_input("دراسات خطة", 0),
-                "دراسات استشارية": st.number_input("استشارية", 0),
+                "دراسات استشارية": st.number_input("دراسات استشارية", 0),
                 "تمويل ذاتي": st.number_input("تمويل ذاتي", 0),
                 "تقارير مرحلية": st.number_input("تقارير مرحلية", 0),
                 "تقارير نهائية": st.number_input("تقارير نهائية", 0),
                 "متدربين": st.number_input("متدربين", 0),
                 "مدربين": st.number_input("مدربين", 0),
-                "اجتماعات وزارة": st.number_input("وزارة", 0),
-                "اجتماعات مركز": st.number_input("مركز", 0),
-                "اجتماعات خارجية": st.number_input("خارجية", 0),
+                "اجتماعات وزارة": st.number_input("اجتماعات وزارة", 0),
+                "اجتماعات مركز": st.number_input("اجتماعات مركز", 0),
+                "اجتماعات خارجية": st.number_input("اجتماعات خارجية", 0),
             }
 
             if st.button("💾 حفظ"):
