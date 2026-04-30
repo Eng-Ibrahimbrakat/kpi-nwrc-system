@@ -229,3 +229,4 @@ else:
             to_excel(df),
             "kpi_data.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
