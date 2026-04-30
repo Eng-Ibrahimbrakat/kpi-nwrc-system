@@ -4,6 +4,7 @@ import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import plotly.express as px
+from io import BytesIO
 
 # ==============================
 # إعداد الصفحة
@@ -12,22 +13,7 @@ st.set_page_config(
     page_title="نظام مؤشرات الأداء - المركز القومي لبحوث المياه",
     layout="wide"
 )
-columns_order = [
-    "تقارير مرحلية",
-    "تقارير نهائية",
-    "متدربين",
-    "مدربين",
-    "اجتماعات وزارة",
-    "اجتماعات مركز",
-    "اجتماعات خارجية",
-    "المعهد",
-    "المستخدم",
-    "الشهر",
-    "السنة"
-]
-sheet.append_row(new_row.iloc[0].tolist())
 
-new_row = new_row[columns_order]
 # ==============================
 # الشعار
 # ==============================
@@ -38,7 +24,7 @@ if os.path.exists(logo_path):
     st.image(logo_path, width=150)
 
 # ==============================
-# RTL عربي
+# RTL
 # ==============================
 st.markdown("""
 <style>
@@ -50,7 +36,7 @@ html, body {
 """, unsafe_allow_html=True)
 
 # ==============================
-# الاتصال بـ Google Sheets
+# Google Sheets
 # ==============================
 def connect_to_gsheet():
     scope = [
@@ -64,11 +50,27 @@ def connect_to_gsheet():
 
     client = gspread.authorize(credentials)
     sheet = client.open_by_key("1QSfmNo9U0TNvdwRgLhLBgVNZbiL8wVcoWlffBz6cSfg").sheet1
-
     return sheet
 
 # ==============================
-# المستخدمين (كل المعاهد)
+# ترتيب الأعمدة (مهم جدًا)
+# ==============================
+COLUMNS_ORDER = [
+    "تقارير مرحلية",
+    "تقارير نهائية",
+    "متدربين",
+    "مدربين",
+    "اجتماعات وزارة",
+    "اجتماعات مركز",
+    "اجتماعات خارجية",
+    "المعهد",
+    "المستخدم",
+    "الشهر",
+    "السنة"
+]
+
+# ==============================
+# المستخدمين
 # ==============================
 USERS = {
     "admin": {"password": "admin123", "role": "admin", "institute": "الجميع"},
@@ -82,9 +84,9 @@ USERS = {
     "gwri": {"password": "1234", "role": "user", "institute": "معهد بحوث المياه الجوفية"},
     "chri": {"password": "1234", "role": "user", "institute": "معهد بحوث صيانة القنوات"},
     "eri": {"password": "1234", "role": "user", "institute": "معهد بحوث الإنشاءات"},
-    "mri": {"password": "1234", "role": "user", "institute": "معهد بحوث الميكانيكا والكهرباء"},
+    "mri": {"password": "1234", "role": "user", "institute": "معهد بحوث الميكانيكا"},
     "sri": {"password": "1234", "role": "user", "institute": "معهد بحوث المساحة"},
-    "ecri": {"password": "1234", "role": "user", "institute": "معهد بحوث البيئة وتغير المناخ"},
+    "ecri": {"password": "1234", "role": "user", "institute": "معهد البيئة وتغير المناخ"},
 }
 
 # ==============================
@@ -128,15 +130,11 @@ else:
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
 
-    # ==============================
     # صلاحيات
-    # ==============================
     if not df.empty and st.session_state.role != "admin":
         df = df[df["المعهد"] == st.session_state.institute]
 
-    # ==============================
     # Tabs
-    # ==============================
     if st.session_state.role == "admin":
         tab_dashboard, tab_data = st.tabs(["📊 Dashboard", "📄 البيانات"])
     else:
@@ -145,7 +143,7 @@ else:
         )
 
     # ==============================
-    # الإدخال (فقط user)
+    # الإدخال
     # ==============================
     if st.session_state.role != "admin":
         with tab_input:
@@ -162,9 +160,9 @@ else:
                 "تقارير نهائية": st.number_input("تقارير نهائية", 0),
                 "متدربين": st.number_input("متدربين", 0),
                 "مدربين": st.number_input("مدربين", 0),
-                "اجتماعات وزارة": st.number_input("اجتماعات وزارة", 0),
-                "اجتماعات مركز": st.number_input("اجتماعات مركز", 0),
-                "اجتماعات خارجية": st.number_input("اجتماعات خارجية", 0),
+                "اجتماعات وزارة": st.number_input("وزارة", 0),
+                "اجتماعات مركز": st.number_input("مركز", 0),
+                "اجتماعات خارجية": st.number_input("خارجية", 0),
             }
 
             if st.button("💾 حفظ"):
@@ -174,6 +172,9 @@ else:
                 new_row["المستخدم"] = st.session_state.username
                 new_row["الشهر"] = month
                 new_row["السنة"] = year
+
+                # ترتيب الأعمدة
+                new_row = new_row[COLUMNS_ORDER]
 
                 # منع التكرار
                 if not df.empty:
@@ -186,11 +187,11 @@ else:
                         st.error("❌ تم إدخال هذا الشهر مسبقاً")
                         st.stop()
 
-                # أول مرة
+                # إنشاء الأعمدة أول مرة
                 if len(sheet.get_all_values()) == 0:
-                    sheet.append_row(new_row.columns.tolist())
+                    sheet.append_row(COLUMNS_ORDER)
 
-                sheet.append_row(new_row.iloc[0].astype(str).tolist())
+                sheet.append_row(new_row.iloc[0].tolist())
 
                 st.success("✅ تم الحفظ")
 
@@ -228,19 +229,20 @@ else:
             st.info("لا توجد بيانات")
 
     # ==============================
-    # عرض + تحميل
+    # عرض + تحميل Excel
     # ==============================
     with tab_data:
-         
-        from io import BytesIO
-    
+
+        st.dataframe(df)
+
         def to_excel(df):
             output = BytesIO()
             df.to_excel(output, index=False)
             return output.getvalue()
-    
+
         st.download_button(
             "📥 تحميل Excel",
             to_excel(df),
             "kpi_data.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
