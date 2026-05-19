@@ -60,7 +60,7 @@ USERS = {
     "cori": {"password": "1234", "role": "user", "institute": "معهد بحوث الشواطئ"},
     "gwri": {"password": "1234", "role": "user", "institute": "معهد بحوث المياه الجوفية"},
     "chri": {"password": "1234", "role": "user", "institute": "معهد بحوث صيانة القنوات"},
-    "eri": {"password": "1234", "role": "user", "institute": "معهد بحوث الإنشاءات"},
+    "sri": {"password": "1234", "role": "user", "institute": "معهد بحوث الإنشاءات"},
     "mri": {"password": "1234", "role": "user", "institute": "معهد بحوث الميكانيكا والكهرباء"},
     "sri": {"password": "1234", "role": "user", "institute": "معهد بحوث المساحة"},
     "ecri": {"password": "1234", "role": "user", "institute": "معهد بحوث البيئة وتغير المناخ"},
@@ -237,21 +237,89 @@ else:
         if not df.empty:
 
             import plotly.express as px
-            fig_monthly = px.line(
-                df,
-                x="شهر_سنة",
-                y=[
-                    "إجمالي التقارير",
-                    "إجمالي الاجتماعات",
-                    "متدربين",
-                    "مدربين"
-                ],
-                markers=True,
-                title="التغير الشهري للمؤشرات"
+            # تحويل القيم الرقمية
+            numeric_cols = [
+                "إجمالي التقارير",
+                "إجمالي الاجتماعات",
+                "متدربين",
+                "مدربين"
+            ]
+            
+            for col in numeric_cols:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            
+            # إنشاء ترتيب الشهر
+            df["ترتيب_الشهر"] = df["الشهر"].map(month_order)
+            
+            # تجميع البيانات
+            df_group = df.groupby(
+                ["السنة", "ترتيب_الشهر", "الشهر", "المعهد"]
+            ).sum(numeric_only=True).reset_index()
+            
+            # ترتيب البيانات
+            df_group = df_group.sort_values(
+                by=["السنة", "ترتيب_الشهر"]
             )
             
-            st.plotly_chart(fig_monthly, use_container_width=True)    
+            # ==============================
+            # رسم التقارير
+            # ==============================
             
+            fig1 = px.line(
+                df_group,
+                x="الشهر",
+                y="إجمالي التقارير",
+                color="المعهد",
+                markers=True,
+                title="التغير الشهري للتقارير"
+            )
+            
+            st.plotly_chart(fig1, use_container_width=True)
+            
+            # ==============================
+            # رسم الاجتماعات
+            # ==============================
+            
+            fig2 = px.line(
+                df_group,
+                x="الشهر",
+                y="إجمالي الاجتماعات",
+                color="المعهد",
+                markers=True,
+                title="التغير الشهري للاجتماعات"
+            )
+            
+            st.plotly_chart(fig2, use_container_width=True)
+            
+            # ==============================
+            # رسم المتدربين
+            # ==============================
+            
+            fig3 = px.line(
+                df_group,
+                x="الشهر",
+                y="متدربين",
+                color="المعهد",
+                markers=True,
+                title="التغير الشهري للمتدربين"
+            )
+            
+            st.plotly_chart(fig3, use_container_width=True)
+            
+            # ==============================
+            # رسم المدربين
+            # ==============================
+            
+            fig4 = px.line(
+                df_group,
+                x="الشهر",
+                y="مدربين",
+                color="المعهد",
+                markers=True,
+                title="التغير الشهري للمدربين"
+            )
+            
+            st.plotly_chart(fig4, use_container_width=True)
 
     # =========================
     # البيانات
