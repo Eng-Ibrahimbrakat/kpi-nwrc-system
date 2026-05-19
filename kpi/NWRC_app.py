@@ -205,18 +205,53 @@ else:
     with tab3:
 
         st.title("📈 التغير الشهري")
-
+        # ==============================
+        # ترتيب الشهور عربي
+        # ==============================
+        
+        month_order = {
+            "يناير": 1,
+            "فبراير": 2,
+            "مارس": 3,
+            "أبريل": 4,
+            "مايو": 5,
+            "يونيو": 6,
+            "يوليو": 7,
+            "أغسطس": 8,
+            "سبتمبر": 9,
+            "أكتوبر": 10,
+            "نوفمبر": 11,
+            "ديسمبر": 12
+        }
+        
+        # إنشاء عمود ترتيب
+        df["ترتيب_الشهر"] = df["الشهر"].map(month_order)
+        
+        # ترتيب البيانات
+        df = df.sort_values(
+            by=["السنة", "ترتيب_الشهر"]
+        )
+        
+        # إنشاء اسم للشهر + السنة
+        df["شهر_سنة"] = df["الشهر"] + " - " + df["السنة"].astype(str)    
         if not df.empty:
 
             import plotly.express as px
-
-            df_group = df.groupby(["الشهر","المعهد"]).sum(numeric_only=True).reset_index()
-
-            fig = px.line(df_group, x="الشهر", y="إجمالي التقارير", color="المعهد", markers=True)
-            st.plotly_chart(fig, use_container_width=True)
-
-            fig2 = px.line(df_group, x="الشهر", y="إجمالي الاجتماعات", color="المعهد", markers=True)
-            st.plotly_chart(fig2, use_container_width=True)
+            fig_monthly = px.line(
+                df,
+                x="شهر_سنة",
+                y=[
+                    "إجمالي التقارير",
+                    "إجمالي الاجتماعات",
+                    "متدربين",
+                    "مدربين"
+                ],
+                markers=True,
+                title="التغير الشهري للمؤشرات"
+            )
+            
+            st.plotly_chart(fig_monthly, use_container_width=True)    
+            
 
     # =========================
     # البيانات
