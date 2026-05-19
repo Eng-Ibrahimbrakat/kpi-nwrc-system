@@ -3,37 +3,6 @@ import pandas as pd
 import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import plotly.express as px
-from io import BytesIO
-
-# ==============================
-# إعداد الصفحة
-# ==============================
-st.set_page_config(
-    page_title="نظام مؤشرات الأداء - المركز القومي لبحوث المياه",
-    layout="wide"
-)
-
-# ==============================
-# الشعار
-# ==============================
-current_dir = os.path.dirname(__file__)
-logo_path = os.path.join(current_dir, "logo.png")
-
-if os.path.exists(logo_path):
-    st.image(logo_path, width=150)
-
-# ==============================
-# RTL
-# ==============================
-st.markdown("""
-<style>
-html, body {
-    direction: rtl;
-    text-align: right;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # ==============================
 # Google Sheets
@@ -53,24 +22,32 @@ def connect_to_gsheet():
     return sheet
 
 # ==============================
-# ترتيب الأعمدة (مهم جدًا)
+# إعداد الصفحة
 # ==============================
-COLUMNS_ORDER = [
-    "تقارير مرحلية",
-    "تقارير نهائية",
-    "متدربين",
-    "مدربين",
-    "اجتماعات وزارة",
-    "اجتماعات مركز",
-    "اجتماعات خارجية",
-    "المعهد",
-    "المستخدم",
-    "الشهر",
-    "السنة"
-]
+st.set_page_config(page_title="KPI System", layout="wide")
 
 # ==============================
-# المستخدمين
+# Logo
+# ==============================
+current_dir = os.path.dirname(__file__)
+logo_path = os.path.join(current_dir, "logo.png")
+if os.path.exists(logo_path):
+    st.image(logo_path, width=150)
+
+# ==============================
+# RTL
+# ==============================
+st.markdown("""
+<style>
+html, body, [class*="css"]  {
+    direction: rtl;
+    text-align: right;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ==============================
+# Users
 # ==============================
 USERS = {
     "admin": {"password": "admin123", "role": "admin", "institute": "الجميع"},
@@ -84,9 +61,9 @@ USERS = {
     "gwri": {"password": "1234", "role": "user", "institute": "معهد بحوث المياه الجوفية"},
     "chri": {"password": "1234", "role": "user", "institute": "معهد بحوث صيانة القنوات"},
     "eri": {"password": "1234", "role": "user", "institute": "معهد بحوث الإنشاءات"},
-    "mri": {"password": "1234", "role": "user", "institute": "معهد بحوث الميكانيكا"},
+    "mri": {"password": "1234", "role": "user", "institute": "معهد بحوث الميكانيكا والكهرباء"},
     "sri": {"password": "1234", "role": "user", "institute": "معهد بحوث المساحة"},
-    "ecri": {"password": "1234", "role": "user", "institute": "معهد البيئة وتغير المناخ"},
+    "ecri": {"password": "1234", "role": "user", "institute": "معهد بحوث البيئة وتغير المناخ"},
 }
 
 # ==============================
@@ -96,7 +73,7 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 # ==============================
-# تسجيل الدخول
+# Login
 # ==============================
 if not st.session_state.logged_in:
 
@@ -116,11 +93,11 @@ if not st.session_state.logged_in:
             st.error("❌ بيانات غير صحيحة")
 
 # ==============================
-# بعد تسجيل الدخول
+# App
 # ==============================
 else:
 
-    st.success(f"مرحباً {st.session_state.username} - {st.session_state.institute}")
+    st.success(f"مرحباً {st.session_state.username}")
 
     if st.button("تسجيل خروج"):
         st.session_state.clear()
@@ -130,23 +107,32 @@ else:
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
 
+    if not df.empty:
+        numeric_cols = [
+            "تقارير مرحلية","تقارير نهائية","متدربين","مدربين",
+            "اجتماعات وزارة","اجتماعات مركز","اجتماعات خارجية"
+        ]
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+        df["إجمالي التقارير"] = df["تقارير مرحلية"] + df["تقارير نهائية"]
+        df["إجمالي الاجتماعات"] = df["اجتماعات وزارة"] + df["اجتماعات مركز"] + df["اجتماعات خارجية"]
+
     # صلاحيات
-    if not df.empty and st.session_state.role != "admin":
+    if st.session_state.role != "admin":
         df = df[df["المعهد"] == st.session_state.institute]
 
     # Tabs
     if st.session_state.role == "admin":
-        tab_dashboard, tab_data = st.tabs(["📊 Dashboard", "📄 البيانات"])
+        tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📈 التغير الشهري", "📄 البيانات"])
     else:
-        tab_input, tab_dashboard, tab_data = st.tabs(
-            ["📥 إدخال البيانات", "📊 Dashboard", "📄 البيانات"]
-        )
+        tab1, tab2, tab3, tab4 = st.tabs(["📥 إدخال", "📊 Dashboard", "📈 التغير الشهري", "📄 البيانات"])
 
-    # ==============================
+    # =========================
     # الإدخال
-    # ==============================
+    # =========================
     if st.session_state.role != "admin":
-        with tab_input:
+        with tab1:
 
             month = st.selectbox("الشهر",
                 ["يناير","فبراير","مارس","أبريل","مايو","يونيو",
@@ -156,6 +142,9 @@ else:
             year = st.number_input("السنة", 2020, 2035, 2026)
 
             data_input = {
+                "دراسات خطة": st.number_input("دراسات خطة", 0),
+                "دراسات استشارية": st.number_input("استشارية", 0),
+                "تمويل ذاتي": st.number_input("تمويل ذاتي", 0),
                 "تقارير مرحلية": st.number_input("تقارير مرحلية", 0),
                 "تقارير نهائية": st.number_input("تقارير نهائية", 0),
                 "متدربين": st.number_input("متدربين", 0),
@@ -171,78 +160,76 @@ else:
                 new_row["المعهد"] = st.session_state.institute
                 new_row["المستخدم"] = st.session_state.username
                 new_row["الشهر"] = month
-                new_row["السنة"] = year
-
-                # ترتيب الأعمدة
-                new_row = new_row[COLUMNS_ORDER]
+                new_row["السنة"] = int(year)
 
                 # منع التكرار
                 if not df.empty:
                     cond = (
                         (df["المعهد"] == st.session_state.institute) &
                         (df["الشهر"] == month) &
-                        (df["السنة"] == year)
+                        (df["السنة"] == int(year))
                     )
                     if cond.any():
-                        st.error("❌ تم إدخال هذا الشهر مسبقاً")
+                        st.error("❌ تم الإدخال مسبقاً")
                         st.stop()
 
-                # إنشاء الأعمدة أول مرة
+                # Headers
                 if len(sheet.get_all_values()) == 0:
-                    sheet.append_row(COLUMNS_ORDER)
+                    sheet.append_row(new_row.columns.tolist())
 
-                sheet.append_row(new_row.iloc[0].tolist())
+                # 🔥 حل المشكلة هنا
+                clean_row = [int(x) if isinstance(x, (int, float)) else str(x) for x in new_row.iloc[0]]
+
+                sheet.append_row(clean_row)
 
                 st.success("✅ تم الحفظ")
 
-    # ==============================
+    # =========================
     # Dashboard
-    # ==============================
-    with tab_dashboard:
+    # =========================
+    with tab2:
 
         st.title("📊 Dashboard")
 
         if not df.empty:
-
-            cols = ["تقارير مرحلية","تقارير نهائية","متدربين","مدربين",
-                    "اجتماعات وزارة","اجتماعات مركز","اجتماعات خارجية"]
-
-            for c in cols:
-                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
-
-            df["إجمالي التقارير"] = df["تقارير مرحلية"] + df["تقارير نهائية"]
-            df["إجمالي الاجتماعات"] = df["اجتماعات وزارة"] + df["اجتماعات مركز"] + df["اجتماعات خارجية"]
-
             col1, col2, col3, col4 = st.columns(4)
 
-            col1.metric("📄 التقارير", int(df["إجمالي التقارير"].sum()))
-            col2.metric("👨‍🏫 المدربين", int(df["مدربين"].sum()))
-            col3.metric("👨‍🎓 المتدربين", int(df["متدربين"].sum()))
-            col4.metric("📅 الاجتماعات", int(df["إجمالي الاجتماعات"].sum()))
+            col1.metric("التقارير", int(df["إجمالي التقارير"].sum()))
+            col2.metric("المدربين", int(df["مدربين"].sum()))
+            col3.metric("المتدربين", int(df["متدربين"].sum()))
+            col4.metric("الاجتماعات", int(df["إجمالي الاجتماعات"].sum()))
 
-            st.divider()
+    # =========================
+    # التغير الشهري
+    # =========================
+    with tab3:
 
-            fig = px.bar(df, x="المعهد", y="إجمالي التقارير", color="المعهد")
+        st.title("📈 التغير الشهري")
+
+        if not df.empty:
+
+            import plotly.express as px
+
+            df_group = df.groupby(["الشهر","المعهد"]).sum(numeric_only=True).reset_index()
+
+            fig = px.line(df_group, x="الشهر", y="إجمالي التقارير", color="المعهد", markers=True)
             st.plotly_chart(fig, use_container_width=True)
 
-        else:
-            st.info("لا توجد بيانات")
+            fig2 = px.line(df_group, x="الشهر", y="إجمالي الاجتماعات", color="المعهد", markers=True)
+            st.plotly_chart(fig2, use_container_width=True)
 
-    # ==============================
-    # عرض + تحميل Excel
-    # ==============================
-    with tab_data:
+    # =========================
+    # البيانات
+    # =========================
+    with tab4:
 
         st.dataframe(df)
 
-        def to_excel(df):
-            output = BytesIO()
-            df.to_excel(output, index=False)
-            return output.getvalue()
+        csv = df.to_csv(index=False).encode('utf-8-sig')
 
         st.download_button(
             "📥 تحميل Excel",
-            to_excel(df),
-            "kpi_data.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            csv,
+            "kpi_data.csv",
+            "text/csv"
         )
