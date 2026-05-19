@@ -156,12 +156,6 @@ else:
 
             if st.button("💾 حفظ"):
 
-                new_row = pd.DataFrame([data_input])
-                new_row["المعهد"] = st.session_state.institute
-                new_row["المستخدم"] = st.session_state.username
-                new_row["الشهر"] = month
-                new_row["السنة"] = int(year)
-
                 # منع التكرار
                 if not df.empty:
                     cond = (
@@ -169,25 +163,63 @@ else:
                         (df["الشهر"] == month) &
                         (df["السنة"] == int(year))
                     )
+            
                     if cond.any():
                         st.error("❌ تم الإدخال مسبقاً")
                         st.stop()
-
-                # Headers
-                if len(sheet.get_all_values()) == 0:
-                    sheet.append_row(new_row.columns.tolist())
-
-                # 🔥 حل المشكلة هنا
-               # تجهيز الصف للإرسال إلى Google Sheets
-                clean_row = [
-                str(x) if pd.notnull(x) else ""
-                for x in new_row.iloc[0].tolist()
+            
+                # ترتيب الأعمدة الثابت
+                columns_order = [
+                    "المعهد",
+                    "المستخدم",
+                    "الشهر",
+                    "السنة",
+                    "دراسات خطة",
+                    "دراسات استشارية",
+                    "تمويل ذاتي",
+                    "تقارير مرحلية",
+                    "تقارير نهائية",
+                    "متدربين",
+                    "مدربين",
+                    "اجتماعات وزارة",
+                    "اجتماعات مركز",
+                    "اجتماعات خارجية"
                 ]
-
-                # إضافة الصف
-                sheet.append_row(clean_row)
-                
-                st.success("✅ تم الحفظ")
+            
+                # بيانات الصف
+                row_data = [
+                    st.session_state.institute,
+                    st.session_state.username,
+                    month,
+                    int(year),
+                    data_input["دراسات خطة"],
+                    data_input["دراسات استشارية"],
+                    data_input["تمويل ذاتي"],
+                    data_input["تقارير مرحلية"],
+                    data_input["تقارير نهائية"],
+                    data_input["متدربين"],
+                    data_input["مدربين"],
+                    data_input["اجتماعات وزارة"],
+                    data_input["اجتماعات مركز"],
+                    data_input["اجتماعات خارجية"]
+                ]
+            
+                try:
+            
+                    # إنشاء الهيدر إذا الملف فارغ
+                    if len(sheet.get_all_values()) == 0:
+                        sheet.append_row(columns_order)
+            
+                    # إضافة صف جديد
+                    sheet.append_row(
+                        row_data,
+                        value_input_option="USER_ENTERED"
+                    )
+            
+                    st.success("✅ تم الحفظ بنجاح")
+            
+                except Exception as e:
+                    st.error(f"حدث خطأ: {e}")
     # =========================
     # Dashboard
     # =========================
