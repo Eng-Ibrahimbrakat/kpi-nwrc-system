@@ -60,7 +60,7 @@ USERS = {
     "cori": {"password": "1234", "role": "user", "institute": "معهد بحوث الشواطئ"},
     "gwri": {"password": "1234", "role": "user", "institute": "معهد بحوث المياه الجوفية"},
     "chri": {"password": "1234", "role": "user", "institute": "معهد بحوث صيانة القنوات"},
-    "sri": {"password": "1234", "role": "user", "institute": "معهد بحوث الإنشاءات"},
+    "eri": {"password": "1234", "role": "user", "institute": "معهد بحوث الإنشاءات"},
     "mri": {"password": "1234", "role": "user", "institute": "معهد بحوث الميكانيكا والكهرباء"},
     "sri": {"password": "1234", "role": "user", "institute": "معهد بحوث المساحة"},
     "ecri": {"password": "1234", "role": "user", "institute": "معهد بحوث البيئة وتغير المناخ"},
@@ -178,12 +178,16 @@ else:
                     sheet.append_row(new_row.columns.tolist())
 
                 # 🔥 حل المشكلة هنا
-                clean_row = [int(x) if isinstance(x, (int, float)) else str(x) for x in new_row.iloc[0]]
+               # تجهيز الصف للإرسال إلى Google Sheets
+                clean_row = [
+                str(x) if pd.notnull(x) else ""
+                for x in new_row.iloc[0].tolist()
+                ]
 
+                # إضافة الصف
                 sheet.append_row(clean_row)
-
+                
                 st.success("✅ تم الحفظ")
-
     # =========================
     # Dashboard
     # =========================
