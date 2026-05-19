@@ -267,7 +267,7 @@ else:
             
             fig1 = px.line(
                 df_group,
-                x="الشهر",
+                x="شهر_سنة",
                 y="إجمالي التقارير",
                 color="المعهد",
                 markers=True,
@@ -282,7 +282,7 @@ else:
             
             fig2 = px.line(
                 df_group,
-                x="الشهر",
+                x="شهر_سنة",
                 y="إجمالي الاجتماعات",
                 color="المعهد",
                 markers=True,
@@ -297,7 +297,7 @@ else:
             
             fig3 = px.line(
                 df_group,
-                x="الشهر",
+                x="شهر_سنة",
                 y="متدربين",
                 color="المعهد",
                 markers=True,
@@ -312,7 +312,7 @@ else:
             
             fig4 = px.line(
                 df_group,
-                x="الشهر",
+                x="شهر_سنة",
                 y="مدربين",
                 color="المعهد",
                 markers=True,
@@ -320,7 +320,7 @@ else:
             )
             
             st.plotly_chart(fig4, use_container_width=True)
-
+          
     # =========================
     # البيانات
     # =========================
