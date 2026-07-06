@@ -1,4 +1,3 @@
-import streamlit as st
 import pandas as pd
 import os
 import gspread
@@ -214,6 +213,21 @@ USERS = {
 }
 
 # ==============================
+# دوال مساعدة للقيم الآمنة
+# ==============================
+def safe_get(df, column, default=0):
+    """الحصول على قيمة العمود بشكل آمن مع قيمة افتراضية"""
+    if column in df.columns:
+        return df[column]
+    return default
+
+def safe_sum(df, column, default=0):
+    """حساب مجموع العمود بشكل آمن"""
+    if column in df.columns:
+        return int(df[column].sum())
+    return default
+
+# ==============================
 # Session State
 # ==============================
 if "logged_in" not in st.session_state:
@@ -308,7 +322,6 @@ else:
             with col3:
                 projects_research = st.number_input("مشروعات بحثية جارية", min_value=0)
             
-            # إجمالي تلقائي
             total_studies = studies_research + studies_consult + projects_research
             st.info(f"إجمالي الدراسات الجارية: {total_studies}")
             
@@ -505,14 +518,16 @@ else:
                 
                 # منع التكرار
                 if not df.empty:
-                    cond = (
-                        (df["المعهد"] == st.session_state.institute) &
-                        (df["الشهر"] == month) &
-                        (pd.to_numeric(df["السنة"], errors="coerce").fillna(0).astype(int) == int(year))
-                    )
-                    if cond.any():
-                        st.error("❌ تم إدخال بيانات هذا الشهر مسبقاً")
-                        st.stop()
+                    # التأكد من وجود الأعمدة المطلوبة
+                    if "المعهد" in df.columns and "الشهر" in df.columns and "السنة" in df.columns:
+                        cond = (
+                            (df["المعهد"] == st.session_state.institute) &
+                            (df["الشهر"] == month) &
+                            (pd.to_numeric(df["السنة"], errors="coerce").fillna(0).astype(int) == int(year))
+                        )
+                        if cond.any():
+                            st.error("❌ تم إدخال بيانات هذا الشهر مسبقاً")
+                            st.stop()
                 
                 # إنشاء Header إذا كانت الـ Sheet فارغة
                 if len(sheet.get_all_values()) == 0:
@@ -529,7 +544,7 @@ else:
     # تجهيز البيانات للعرض
     # ==============================
     if not df.empty:
-        # تحويل الأعمدة الرقمية
+        # تحويل الأعمدة الرقمية الموجودة
         numeric_cols = [
             "تقارير مرحلية", "تقارير نهائية", "مذكرات",
             "متدربين", "مدربين", "أيام تدريب متدربين داخل المعهد", "أيام تدريب متدربين خارج المعهد",
@@ -547,20 +562,6 @@ else:
         for c in numeric_cols:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-        
-        # حساب الإجماليات
-        if "إجمالي الدراسات الجارية" not in df.columns:
-            df["إجمالي الدراسات الجارية"] = (
-                df.get("دراسات خطة بحثية جارية", 0) + 
-                df.get("دراسات استشارية جارية", 0) + 
-                df.get("مشروعات بحثية جارية", 0)
-            )
-        
-        if "إجمالي مشاركين أنشطة علمية" not in df.columns:
-            df["إجمالي مشاركين أنشطة علمية"] = (
-                df.get("مشتركين مؤتمرات", 0) + 
-                df.get("مشتركين ورش عمل", 0)
-            )
 
     # ==============================
     # Dashboard
@@ -574,20 +575,29 @@ else:
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             
             with col1:
-                st.metric("📚 إجمالي الدراسات", int(df["إجمالي الدراسات الجارية"].sum()))
+                total_studies = safe_sum(df, "إجمالي الدراسات الجارية")
+                if total_studies == 0:
+                    total_studies = safe_sum(df, "دراسات خطة بحثية جارية") + safe_sum(df, "دراسات استشارية جارية") + safe_sum(df, "مشروعات بحثية جارية")
+                st.metric("📚 إجمالي الدراسات", total_studies)
+            
             with col2:
-                total_reports = int(df["تقارير مرحلية"].sum() + df["تقارير نهائية"].sum())
+                total_reports = safe_sum(df, "تقارير مرحلية") + safe_sum(df, "تقارير نهائية")
                 st.metric("📄 إجمالي التقارير", total_reports)
+            
             with col3:
-                st.metric("👨‍🏫 المدربين", int(df["مدربين"].sum()))
+                st.metric("👨‍🏫 المدربين", safe_sum(df, "مدربين"))
+            
             with col4:
-                st.metric("👨‍🎓 المتدربين", int(df["متدربين"].sum()))
+                st.metric("👨‍🎓 المتدربين", safe_sum(df, "متدربين"))
+            
             with col5:
-                total_meetings = int(df.get("إجمالي اجتماعات", 
-                    df["اجتماعات وزارة"] + df["اجتماعات مركز"] + df["اجتماعات خارجية"]).sum())
+                total_meetings = safe_sum(df, "إجمالي اجتماعات")
+                if total_meetings == 0:
+                    total_meetings = safe_sum(df, "اجتماعات وزارة") + safe_sum(df, "اجتماعات مركز") + safe_sum(df, "اجتماعات خارجية")
                 st.metric("📅 الاجتماعات", total_meetings)
+            
             with col6:
-                st.metric("📝 أوراق بحثية", int(df["أوراق بحثية منشورة"].sum()))
+                st.metric("📝 أوراق بحثية", safe_sum(df, "أوراق بحثية منشورة"))
             
             st.divider()
             
@@ -596,74 +606,119 @@ else:
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.metric("📋 المقترحات", int(df["مقترحات دراسات استشارية"].sum() + df["مقترحات مشروعات بحثية"].sum()))
+                total_proposals = safe_sum(df, "مقترحات دراسات استشارية") + safe_sum(df, "مقترحات مشروعات بحثية")
+                st.metric("📋 المقترحات", total_proposals)
+            
             with col2:
-                st.metric("🏃 المأموريات (أيام)", int(df["أيام فعلية مأموريات حقلية"].sum()))
+                st.metric("🏃 المأموريات (أيام)", safe_sum(df, "أيام فعلية مأموريات حقلية"))
+            
             with col3:
-                st.metric("🔬 أنشطة علمية", int(df["إجمالي مشاركين أنشطة علمية"].sum()))
+                total_activities = safe_sum(df, "إجمالي مشاركين أنشطة علمية")
+                if total_activities == 0:
+                    total_activities = safe_sum(df, "مشتركين مؤتمرات") + safe_sum(df, "مشتركين ورش عمل")
+                st.metric("🔬 أنشطة علمية", total_activities)
+            
             with col4:
-                st.metric("🎓 رسائل علمية", int(df["رسائل ماجستير ودكتوراة منتهية"].sum()))
+                st.metric("🎓 رسائل علمية", safe_sum(df, "رسائل ماجستير ودكتوراة منتهية"))
             
             st.divider()
             
-            # رسوم بيانية
+            # رسوم بيانية - فقط للأعمدة الموجودة
             col1, col2 = st.columns(2)
             
             with col1:
-                # رسم بياني للدراسات الجارية
-                fig_studies = px.bar(
-                    df,
-                    x="المعهد",
-                    y=["دراسات خطة بحثية جارية", "دراسات استشارية جارية", "مشروعات بحثية جارية"],
-                    title="توزيع الدراسات الجارية حسب المعهد",
-                    barmode="group"
-                )
-                st.plotly_chart(fig_studies, use_container_width=True)
+                # الدراسات الجارية
+                study_cols = []
+                for col in ["دراسات خطة بحثية جارية", "دراسات استشارية جارية", "مشروعات بحثية جارية"]:
+                    if col in df.columns:
+                        study_cols.append(col)
+                
+                if study_cols:
+                    fig_studies = px.bar(
+                        df,
+                        x="المعهد",
+                        y=study_cols,
+                        title="توزيع الدراسات الجارية حسب المعهد",
+                        barmode="group"
+                    )
+                    st.plotly_chart(fig_studies, use_container_width=True)
+                else:
+                    st.info("لا توجد بيانات للدراسات الجارية")
             
             with col2:
-                # رسم بياني للتقارير
-                fig_reports = px.bar(
-                    df,
-                    x="المعهد",
-                    y=["تقارير مرحلية", "تقارير نهائية"],
-                    title="التقارير حسب المعهد",
-                    barmode="stack"
-                )
-                st.plotly_chart(fig_reports, use_container_width=True)
+                # التقارير
+                report_cols = []
+                for col in ["تقارير مرحلية", "تقارير نهائية"]:
+                    if col in df.columns:
+                        report_cols.append(col)
+                
+                if report_cols:
+                    fig_reports = px.bar(
+                        df,
+                        x="المعهد",
+                        y=report_cols,
+                        title="التقارير حسب المعهد",
+                        barmode="stack"
+                    )
+                    st.plotly_chart(fig_reports, use_container_width=True)
+                else:
+                    st.info("لا توجد بيانات للتقارير")
             
             col1, col2 = st.columns(2)
             
             with col1:
-                # رسم بياني للتدريب
-                fig_training = px.bar(
-                    df,
-                    x="المعهد",
-                    y=["متدربين", "مدربين"],
-                    title="التدريب حسب المعهد",
-                    barmode="group"
-                )
-                st.plotly_chart(fig_training, use_container_width=True)
+                # التدريب
+                training_cols = []
+                for col in ["متدربين", "مدربين"]:
+                    if col in df.columns:
+                        training_cols.append(col)
+                
+                if training_cols:
+                    fig_training = px.bar(
+                        df,
+                        x="المعهد",
+                        y=training_cols,
+                        title="التدريب حسب المعهد",
+                        barmode="group"
+                    )
+                    st.plotly_chart(fig_training, use_container_width=True)
+                else:
+                    st.info("لا توجد بيانات للتدريب")
             
             with col2:
-                # رسم بياني للاجتماعات
-                fig_meetings = px.bar(
+                # الاجتماعات
+                meeting_cols = []
+                for col in ["اجتماعات وزارة", "اجتماعات مركز", "اجتماعات خارجية"]:
+                    if col in df.columns:
+                        meeting_cols.append(col)
+                
+                if meeting_cols:
+                    fig_meetings = px.bar(
+                        df,
+                        x="المعهد",
+                        y=meeting_cols,
+                        title="الاجتماعات حسب المعهد",
+                        barmode="stack"
+                    )
+                    st.plotly_chart(fig_meetings, use_container_width=True)
+                else:
+                    st.info("لا توجد بيانات للاجتماعات")
+            
+            # الأوراق البحثية
+            paper_cols = []
+            for col in ["أوراق بحثية منشورة", "أوراق بحثية دولية منشورة"]:
+                if col in df.columns:
+                    paper_cols.append(col)
+            
+            if paper_cols:
+                fig_papers = px.bar(
                     df,
                     x="المعهد",
-                    y=["اجتماعات وزارة", "اجتماعات مركز", "اجتماعات خارجية"],
-                    title="الاجتماعات حسب المعهد",
-                    barmode="stack"
+                    y=paper_cols,
+                    title="الأوراق البحثية حسب المعهد",
+                    barmode="group"
                 )
-                st.plotly_chart(fig_meetings, use_container_width=True)
-            
-            # رسم بياني للأوراق البحثية
-            fig_papers = px.bar(
-                df,
-                x="المعهد",
-                y=["أوراق بحثية منشورة", "أوراق بحثية دولية منشورة"],
-                title="الأوراق البحثية حسب المعهد",
-                barmode="group"
-            )
-            st.plotly_chart(fig_papers, use_container_width=True)
+                st.plotly_chart(fig_papers, use_container_width=True)
             
         else:
             st.info("لا توجد بيانات متاحة")
@@ -674,7 +729,7 @@ else:
     with tab_trend:
         st.title("📈 التغير الشهري")
         
-        if not df.empty:
+        if not df.empty and "الشهر" in df.columns and "السنة" in df.columns:
             df["شهر-سنة"] = df["الشهر"].astype(str) + " - " + df["السنة"].astype(str)
             
             # ترتيب زمني
@@ -685,60 +740,70 @@ else:
             df["الشهر_مرتب"] = pd.Categorical(df["الشهر"], categories=months_order, ordered=True)
             df = df.sort_values(["السنة", "الشهر_مرتب"])
             
-            metric_choice = st.selectbox(
-                "اختر المؤشر",
-                [
-                    "إجمالي الدراسات الجارية",
-                    "تقارير مرحلية",
-                    "تقارير نهائية",
-                    "مذكرات",
-                    "متدربين",
-                    "مدربين",
-                    "مشتركين مؤتمرات",
-                    "مشتركين ورش عمل",
-                    "أيام فعلية مأموريات حقلية",
-                    "أوراق بحثية منشورة",
-                    "أوراق بحثية دولية منشورة",
-                    "رسائل ماجستير ودكتوراة منتهية"
-                ]
-            )
+            # قائمة المؤشرات المتاحة
+            available_metrics = []
+            all_metrics = [
+                "إجمالي الدراسات الجارية",
+                "تقارير مرحلية",
+                "تقارير نهائية",
+                "مذكرات",
+                "متدربين",
+                "مدربين",
+                "مشتركين مؤتمرات",
+                "مشتركين ورش عمل",
+                "أيام فعلية مأموريات حقلية",
+                "أوراق بحثية منشورة",
+                "أوراق بحثية دولية منشورة",
+                "رسائل ماجستير ودكتوراة منتهية"
+            ]
             
-            if st.session_state.role == "admin":
-                fig_trend = px.line(
-                    df,
-                    x="شهر-سنة",
-                    y=metric_choice,
-                    color="المعهد",
-                    markers=True,
-                    title=f"التغير الشهري - {metric_choice}"
+            for metric in all_metrics:
+                if metric in df.columns:
+                    available_metrics.append(metric)
+            
+            if available_metrics:
+                metric_choice = st.selectbox(
+                    "اختر المؤشر",
+                    available_metrics
                 )
+                
+                if st.session_state.role == "admin":
+                    fig_trend = px.line(
+                        df,
+                        x="شهر-سنة",
+                        y=metric_choice,
+                        color="المعهد",
+                        markers=True,
+                        title=f"التغير الشهري - {metric_choice}"
+                    )
+                else:
+                    fig_trend = px.line(
+                        df,
+                        x="شهر-سنة",
+                        y=metric_choice,
+                        markers=True,
+                        title=f"التغير الشهري - {metric_choice} - {st.session_state.institute}"
+                    )
+                
+                fig_trend.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig_trend, use_container_width=True)
+                
+                # مقارنة تراكمية (للأدمن فقط)
+                if st.session_state.role == "admin":
+                    st.divider()
+                    st.subheader("مقارنة تراكمية بين المعاهد")
+                    
+                    fig_cumulative = px.area(
+                        df,
+                        x="شهر-سنة",
+                        y=metric_choice,
+                        color="المعهد",
+                        title=f"المجموع التراكمي - {metric_choice}",
+                        groupnorm=None
+                    )
+                    st.plotly_chart(fig_cumulative, use_container_width=True)
             else:
-                fig_trend = px.line(
-                    df,
-                    x="شهر-سنة",
-                    y=metric_choice,
-                    markers=True,
-                    title=f"التغير الشهري - {metric_choice} - {st.session_state.institute}"
-                )
-            
-            fig_trend.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_trend, use_container_width=True)
-            
-            # مقارنة بين المعاهد (للأدمن فقط)
-            if st.session_state.role == "admin":
-                st.divider()
-                st.subheader("مقارنة تراكمية بين المعاهد")
-                
-                fig_cumulative = px.area(
-                    df,
-                    x="شهر-سنة",
-                    y=metric_choice,
-                    color="المعهد",
-                    title=f"المجموع التراكمي - {metric_choice}",
-                    groupnorm=None
-                )
-                st.plotly_chart(fig_cumulative, use_container_width=True)
-                
+                st.info("لا توجد مؤشرات متاحة للعرض")
         else:
             st.info("لا توجد بيانات متاحة")
 
@@ -752,39 +817,51 @@ else:
             # إضافة فلاتر
             col1, col2, col3 = st.columns(3)
             with col1:
-                if st.session_state.role == "admin":
+                if st.session_state.role == "admin" and "المعهد" in df.columns:
                     filter_institute = st.multiselect(
                         "تصفية حسب المعهد",
                         options=df["المعهد"].unique(),
                         default=df["المعهد"].unique()
                     )
                 else:
-                    filter_institute = [st.session_state.institute]
+                    filter_institute = [st.session_state.institute] if "المعهد" in df.columns else []
             
             with col2:
-                filter_year = st.multiselect(
-                    "تصفية حسب السنة",
-                    options=sorted(df["السنة"].unique()),
-                    default=sorted(df["السنة"].unique())
-                )
+                if "السنة" in df.columns:
+                    filter_year = st.multiselect(
+                        "تصفية حسب السنة",
+                        options=sorted(df["السنة"].unique()),
+                        default=sorted(df["السنة"].unique())
+                    )
+                else:
+                    filter_year = []
             
             with col3:
-                filter_month = st.multiselect(
-                    "تصفية حسب الشهر",
-                    options=df["الشهر"].unique(),
-                    default=df["الشهر"].unique()
-                )
+                if "الشهر" in df.columns:
+                    filter_month = st.multiselect(
+                        "تصفية حسب الشهر",
+                        options=df["الشهر"].unique(),
+                        default=df["الشهر"].unique()
+                    )
+                else:
+                    filter_month = []
             
             # تطبيق الفلاتر
-            filtered_df = df[
-                (df["المعهد"].isin(filter_institute)) &
-                (df["السنة"].isin(filter_year)) &
-                (df["الشهر"].isin(filter_month))
-            ]
+            filtered_df = df.copy()
+            if "المعهد" in filtered_df.columns and filter_institute:
+                filtered_df = filtered_df[filtered_df["المعهد"].isin(filter_institute)]
+            if "السنة" in filtered_df.columns and filter_year:
+                filtered_df = filtered_df[filtered_df["السنة"].isin(filter_year)]
+            if "الشهر" in filtered_df.columns and filter_month:
+                filtered_df = filtered_df[filtered_df["الشهر"].isin(filter_month)]
             
             # عرض ملخص إحصائي
             st.subheader("ملخص إحصائي")
-            st.dataframe(filtered_df.describe(), use_container_width=True)
+            numeric_filtered = filtered_df.select_dtypes(include=['float64', 'int64'])
+            if not numeric_filtered.empty:
+                st.dataframe(numeric_filtered.describe(), use_container_width=True)
+            else:
+                st.info("لا توجد بيانات رقمية للعرض الإحصائي")
             
             st.divider()
             
