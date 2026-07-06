@@ -217,11 +217,22 @@ USERS = {
 # ==============================
 # دوال مساعدة
 # ==============================
+def fix_encoding(text):
+    """إصلاح مشاكل الترميز للنص العربي"""
+    if isinstance(text, str):
+        try:
+            # محاولة إصلاح الترميز إذا كان النص مشوهاً
+            return text.encode('latin1').decode('utf-8')
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            # إذا فشل الإصلاح، إرجاع النص كما هو
+            return text
+    return text
+
 def load_data():
-    """تحميل البيانات من Google Sheets بشكل آمن"""
+    """تحميل البيانات من Google Sheets بشكل آمن مع معالجة الترميز"""
     try:
         sheet = connect_to_gsheet()
-        # التحقق من وجود بيانات في الـ sheet
+        # الحصول على جميع القيم كمصفوفة
         all_values = sheet.get_all_values()
         
         if len(all_values) == 0:
@@ -230,12 +241,22 @@ def load_data():
         
         if len(all_values) == 1:
             # فقط صف العناوين موجود - إرجاع DataFrame فارغ مع الأعمدة
-            columns = all_values[0]
+            columns = [fix_encoding(col) for col in all_values[0]]
             return pd.DataFrame(columns=columns)
         
-        # يوجد بيانات - تحميلها
-        data = sheet.get_all_records()
-        return pd.DataFrame(data)
+        # استخراج العناوين والبيانات
+        headers = [fix_encoding(col) for col in all_values[0]]
+        data_rows = all_values[1:]
+        
+        # إنشاء DataFrame
+        df = pd.DataFrame(data_rows, columns=headers)
+        
+        # إصلاح ترميز جميع القيم النصية
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = df[col].apply(fix_encoding)
+        
+        return df
     
     except Exception as e:
         st.error(f"خطأ في تحميل البيانات: {str(e)}")
@@ -250,7 +271,7 @@ def safe_get(df, column, default=0):
 def safe_sum(df, column, default=0):
     """حساب مجموع العمود بشكل آمن"""
     if isinstance(df, pd.DataFrame) and not df.empty and column in df.columns:
-        return int(df[column].sum())
+        return int(pd.to_numeric(df[column], errors='coerce').fillna(0).sum())
     return default
 
 def initialize_sheet():
@@ -564,7 +585,9 @@ else:
                     all_values = sheet.get_all_values()
                     if len(all_values) > 1:  # يوجد بيانات سابقة
                         # الحصول على البيانات الحالية
-                        current_df = pd.DataFrame(all_values[1:], columns=all_values[0])
+                        headers = all_values[0]
+                        data_rows = all_values[1:]
+                        current_df = pd.DataFrame(data_rows, columns=headers)
                         
                         if not current_df.empty:
                             # التحقق من التكرار
@@ -904,24 +927,35 @@ else:
             st.subheader("البيانات الكاملة")
             st.dataframe(filtered_df, use_container_width=True)
             
-            # تحميل Excel
+            # تحميل Excel مع ترميز UTF-8
             def to_excel(dataframe):
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine="openpyxl") as writer:
                     dataframe.to_excel(writer, index=False, sheet_name="KPI_Data")
                 return output.getvalue()
             
-            col1, col2 = st.columns(2)
+            # تحميل CSV مع ترميز UTF-8
+            def to_csv(dataframe):
+                return dataframe.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.download_button(
-                    label="📥 تحميل البيانات المصفاة (Excel)",
+                    label="📥 تحميل Excel",
                     data=to_excel(filtered_df),
-                    file_name=f"kpi_data_filtered_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"kpi_data_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with col2:
                 st.download_button(
-                    label="📥 تحميل كل البيانات (Excel)",
+                    label="📥 تحميل CSV (UTF-8)",
+                    data=to_csv(filtered_df),
+                    file_name=f"kpi_data_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            with col3:
+                st.download_button(
+                    label="📥 تحميل كل البيانات Excel",
                     data=to_excel(df),
                     file_name=f"kpi_data_all_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
