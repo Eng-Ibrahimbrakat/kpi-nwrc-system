@@ -468,7 +468,7 @@ else:
             with st.expander("بيانات ربع سنوية"):
                 col1, col2 = st.columns(2)
                 with col1:
-                    researchers_count = st.number_input("عدد الباحثين (ربع سنوي)", min_value=0)  # تم التعديل هنا
+                    researchers_count = st.number_input("عدد الباحثين (ربع سنوي)", min_value=0)  # تم التعديل
                     professors_count = st.number_input("عدد الأساتذة (ربع سنوي)", min_value=0)
                 with col2:
                     engineers_count = st.number_input("عدد المهندسين (ربع سنوي)", min_value=0)
@@ -516,7 +516,7 @@ else:
                         "أوراق بحثية منشورة": papers_published,
                         "أوراق بحثية دولية منشورة": papers_international,
                         "رسائل ماجستير ودكتوراة منتهية": theses_completed,
-                        "عدد الباحثين": researchers_count,  # تم التعديل هنا
+                        "عدد الباحثين": researchers_count,  # تم التعديل
                         "عدد الأساتذة": professors_count,
                         "عدد المهندسين": engineers_count,
                         "إجمالي عدد العاملين": total_staff,
@@ -573,7 +573,7 @@ else:
             "مشتركين مؤتمرات", "مشتركين ورش عمل",
             "أوراق بحثية منشورة", "أوراق بحثية دولية منشورة",
             "رسائل ماجستير ودكتوراة منتهية",
-            "عدد الباحثين", "عدد الأساتذة", "عدد المهندسين", "إجمالي عدد العاملين",  # تم التعديل هنا
+            "عدد الباحثين", "عدد الأساتذة", "عدد المهندسين", "إجمالي عدد العاملين",  # تم التعديل
             "عدد براءات الاختراع"
         ]
         
@@ -740,7 +740,9 @@ else:
             col1, col2, col3 = st.columns(3)
             with col1:
                 if st.session_state.role == "admin" and "المعهد" in df.columns:
-                    filter_institute = st.multiselect("تصفية حسب المعهد", options=df["المعهد"].unique(), default=df["المعهد"].unique())
+                    filter_institute = st.multiselect("تصفية حسب المعهد", 
+                                                    options=df["المعهد"].unique(), 
+                                                    default=df["المعهد"].unique())
                 else:
                     filter_institute = [st.session_state.institute] if "المعهد" in df.columns else []
             
@@ -753,4 +755,74 @@ else:
             
             with col3:
                 if "الشهر" in df.columns:
-                    filter_month = st.multiselect("تصفية حسب الش
+                    filter_month = st.multiselect("تصفية حسب الشهر", 
+                                                options=df["الشهر"].unique(), 
+                                                default=df["الشهر"].unique())
+                else:
+                    filter_month = []
+            
+            # تطبيق الفلاتر
+            filtered_df = df.copy()
+            if "المعهد" in filtered_df.columns and filter_institute:
+                filtered_df = filtered_df[filtered_df["المعهد"].isin(filter_institute)]
+            if "السنة" in filtered_df.columns and filter_year:
+                filtered_df = filtered_df[filtered_df["السنة"].isin(filter_year)]
+            if "الشهر" in filtered_df.columns and filter_month:
+                filtered_df = filtered_df[filtered_df["الشهر"].isin(filter_month)]
+            
+            # عرض ملخص إحصائي
+            st.subheader("ملخص إحصائي")
+            numeric_filtered = filtered_df.select_dtypes(include=['float64', 'int64'])
+            if not numeric_filtered.empty:
+                st.dataframe(numeric_filtered.describe(), use_container_width=True)
+            else:
+                st.info("لا توجد بيانات رقمية للعرض الإحصائي")
+            
+            st.divider()
+            
+            # عرض البيانات الكاملة
+            st.subheader("البيانات الكاملة")
+            st.dataframe(filtered_df, use_container_width=True)
+            
+            # تحميل Excel مع ترميز UTF-8
+            def to_excel(dataframe):
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    dataframe.to_excel(writer, index=False, sheet_name="KPI_Data")
+                return output.getvalue()
+            
+            # تحميل CSV مع ترميز UTF-8
+            def to_csv(dataframe):
+                return dataframe.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.download_button(
+                    label="📥 تحميل Excel",
+                    data=to_excel(filtered_df),
+                    file_name=f"kpi_data_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            with col2:
+                st.download_button(
+                    label="📥 تحميل CSV (UTF-8)",
+                    data=to_csv(filtered_df),
+                    file_name=f"kpi_data_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            with col3:
+                st.download_button(
+                    label="📥 تحميل كل البيانات Excel",
+                    data=to_excel(df),
+                    file_name=f"kpi_data_all_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            
+        else:
+            st.info("📭 لا توجد بيانات متاحة. يرجى إدخال البيانات أولاً.")
+            
+            # زر لتهيئة الـ Sheet إذا كانت المشكلة في البيانات
+            if st.button("🔄 إعادة تهيئة قاعدة البيانات"):
+                if initialize_sheet():
+                    st.success("✅ تم تهيئة قاعدة البيانات بنجاح")
+                    st.rerun()
