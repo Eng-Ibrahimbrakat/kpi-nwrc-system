@@ -23,11 +23,82 @@ logo_path = os.path.join(current_dir, "logo.png")
 if os.path.exists(logo_path):
     st.image(logo_path, width=150)
 
+# ============================================================
+# CSS محسّن لدعم RTL في الجداول والعناوين
+# ============================================================
 st.markdown("""
 <style>
-html, body, [class*="css"] { direction: rtl; text-align: right; }
+/* RTL عام */
+html, body, [class*="css"] {
+    direction: rtl;
+    text-align: right;
+}
+
 .stButton > button { width: 100%; }
+
 [data-testid="stMetricValue"] { font-size: 1.5rem; }
+
+/* ============ الجداول RTL ============ */
+[data-testid="stDataFrame"] {
+    direction: rtl !important;
+}
+
+[data-testid="stDataFrame"] table {
+    direction: rtl !important;
+    text-align: right !important;
+}
+
+[data-testid="stDataFrame"] th,
+[data-testid="stDataFrame"] td {
+    text-align: right !important;
+    direction: rtl !important;
+}
+
+[data-testid="stDataFrame"] thead th {
+    text-align: right !important;
+    background-color: #f0f2f6 !important;
+    font-weight: bold !important;
+}
+
+[data-testid="stDataEditor"] {
+    direction: rtl !important;
+}
+
+[data-testid="stDataEditor"] table {
+    direction: rtl !important;
+}
+
+[data-testid="stDataEditor"] th,
+[data-testid="stDataEditor"] td {
+    text-align: right !important;
+    direction: rtl !important;
+}
+
+/* العناوين */
+h1, h2, h3, h4, h5, h6 {
+    direction: rtl;
+    text-align: right;
+}
+
+/* التبويبات */
+.stTabs [data-baseweb="tab-list"] {
+    direction: rtl;
+}
+
+/* الرسوم البيانية */
+.js-plotly-plot .plotly .main-svg {
+    direction: ltr;
+}
+
+/* صناديق الإدخال */
+.stTextInput input, .stNumberInput input, .stTextArea textarea {
+    direction: rtl;
+    text-align: right;
+}
+
+.stSelectbox div[data-baseweb="select"] {
+    direction: rtl;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,7 +124,6 @@ def get_spreadsheet():
 
 @st.cache_resource(show_spinner=False)
 def get_worksheet(sheet_name):
-    """الحصول على ورقة عمل مع Cache - تقليل الطلبات"""
     try:
         ss = get_spreadsheet()
         try:
@@ -64,7 +134,6 @@ def get_worksheet(sheet_name):
         return None
 
 def get_or_create_sheet(sheet_name, headers=None):
-    """الحصول على ورقة أو إنشاؤها مع Cache"""
     ws = get_worksheet(sheet_name)
     if ws is None:
         try:
@@ -72,7 +141,6 @@ def get_or_create_sheet(sheet_name, headers=None):
             ws = ss.add_worksheet(title=sheet_name, rows=1000, cols=30)
             if headers:
                 ws.append_row(headers)
-            # مسح الـ cache لإعادة التحميل
             get_worksheet.clear()
             return ws
         except Exception as e:
@@ -80,24 +148,18 @@ def get_or_create_sheet(sheet_name, headers=None):
             return None
     return ws
 
-# ============================================================
-# دالة قراءة البيانات مع Cache و retry
-# ============================================================
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_sheet_data(sheet_name, _cache_bust=0):
-    """قراءة بيانات ورقة مع Cache لمدة 60 ثانية"""
     try:
         ws = get_worksheet(sheet_name)
         if ws is None:
             return []
-        
-        # إعادة محاولة عند الخطأ
         for attempt in range(3):
             try:
                 return ws.get_all_values()
             except gspread.exceptions.APIError as e:
                 if "429" in str(e) or "Quota" in str(e):
-                    time.sleep(2 ** attempt)  # 1s, 2s, 4s
+                    time.sleep(2 ** attempt)
                     continue
                 raise
         return []
@@ -105,7 +167,6 @@ def fetch_sheet_data(sheet_name, _cache_bust=0):
         return []
 
 def invalidate_cache():
-    """مسح ذاكرة التخزين المؤقت للبيانات"""
     fetch_sheet_data.clear()
 
 # ============================================================
@@ -119,23 +180,23 @@ def fix_encoding(text):
             return text
     return text
 
+def rtl_display(df):
+    """عكس ترتيب الأعمدة للعرض RTL"""
+    if df.empty:
+        return df
+    return df[list(reversed(df.columns))]
+
 def load_sheet_data(sheet_name, columns):
-    """تحميل بيانات ورقة كـ DataFrame"""
     try:
         get_or_create_sheet(sheet_name, columns)
         all_values = fetch_sheet_data(sheet_name)
-        
         if len(all_values) <= 1:
             return pd.DataFrame(columns=columns)
-        
         headers = [fix_encoding(h) for h in all_values[0]]
         df = pd.DataFrame(all_values[1:], columns=headers)
-        
-        # إصلاح الترميز للقوائم النصية فقط
         for col in df.columns:
             if df[col].dtype == 'object' and col not in columns:
                 df[col] = df[col].apply(fix_encoding)
-        
         return df
     except Exception:
         return pd.DataFrame(columns=columns)
@@ -146,19 +207,14 @@ def safe_sum(df, column):
     return int(pd.to_numeric(df[column], errors='coerce').fillna(0).sum())
 
 def save_list_data(sheet_name, input_df, base_columns, institute, period_key, period_val):
-    """حفظ قائمة نصية"""
     try:
         full_cols = base_columns + ["المعهد", period_key]
         ws = get_or_create_sheet(sheet_name, full_cols)
-        
         if ws is None:
             st.error("فشل الاتصال بالورقة")
             return
         
-        # قراءة البيانات الموجودة
         all_values = ws.get_all_values()
-        
-        # حذف الصفوف القديمة لنفس المعهد/الفترة
         kept_rows = []
         if len(all_values) > 1:
             existing = pd.DataFrame(all_values[1:], columns=all_values[0])
@@ -169,16 +225,13 @@ def save_list_data(sheet_name, input_df, base_columns, institute, period_key, pe
                 )
                 kept_rows = existing[mask].values.tolist()
         
-        # إعادة الكتابة
         ws.clear()
         ws.append_row(full_cols)
         
-        # إضافة الصفوف المحفوظة (بشكل مجمع)
         if kept_rows:
             rows_to_add = [[str(v) for v in r] for r in kept_rows]
             ws.append_rows(rows_to_add)
         
-        # إضافة الصفوف الجديدة (بشكل مجمع)
         new_rows = []
         for _, row in input_df.iterrows():
             vals = [str(v) if pd.notna(v) else "" for v in row.tolist()]
@@ -189,9 +242,7 @@ def save_list_data(sheet_name, input_df, base_columns, institute, period_key, pe
         if new_rows:
             ws.append_rows(new_rows)
         
-        # مسح الـ cache
         invalidate_cache()
-        
         st.success(f"✅ تم حفظ البيانات في {sheet_name}")
         st.balloons()
         time.sleep(0.5)
@@ -359,7 +410,6 @@ with c_header[2]:
         invalidate_cache()
         st.rerun()
 
-# تحميل البيانات الشهرية مرة واحدة فقط
 df_monthly = load_sheet_data("KPI_Data", MONTHLY_COLUMNS)
 if not df_monthly.empty and st.session_state.role != "admin" and "المعهد" in df_monthly.columns:
     df_monthly = df_monthly[df_monthly["المعهد"] == st.session_state.institute]
@@ -526,8 +576,6 @@ if tab_input is not None:
         if st.button("💾 حفظ البيانات الشهرية", type="primary", key="save_monthly"):
             try:
                 ws = get_or_create_sheet("KPI_Data", MONTHLY_COLUMNS)
-                
-                # منع التكرار
                 all_values = ws.get_all_values()
                 if len(all_values) > 1:
                     existing = pd.DataFrame(all_values[1:], columns=all_values[0])
@@ -880,7 +928,10 @@ if tab_lists_input is not None:
         
         def render_list_editor(tab_obj, sheet_name, base_cols, title, key_prefix):
             with tab_obj:
-                st.subheader(title)
+                st.markdown(f"### 📝 {title}")
+                st.caption("يمكنك إضافة صفوف جديدة بالنقر على زر (+) في أسفل الجدول")
+                st.divider()
+                
                 full_cols = base_cols + ["المعهد", "الفترة"]
                 data = load_sheet_data(sheet_name, full_cols)
                 
@@ -892,12 +943,25 @@ if tab_lists_input is not None:
                 else:
                     data = pd.DataFrame(columns=base_cols)
                 
-                input_df = st.data_editor(
-                    data[base_cols] if not data.empty else pd.DataFrame(columns=base_cols),
-                    num_rows="dynamic", use_container_width=True, key=f"{key_prefix}_ed"
+                if not data.empty:
+                    display_df = rtl_display(data[base_cols])
+                else:
+                    display_df = pd.DataFrame(columns=list(reversed(base_cols)))
+                
+                input_df_rtl = st.data_editor(
+                    display_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"{key_prefix}_ed",
+                    hide_index=True
                 )
                 
-                if st.button(f"💾 حفظ", key=f"{key_prefix}_sv"):
+                if not input_df_rtl.empty:
+                    input_df = input_df_rtl[list(reversed(input_df_rtl.columns))]
+                else:
+                    input_df = input_df_rtl
+                
+                if st.button(f"💾 حفظ {title}", key=f"{key_prefix}_sv"):
                     save_list_data(sheet_name, input_df, base_cols,
                                    st.session_state.institute, "الفترة", period_val)
         
@@ -949,9 +1013,13 @@ if tab_q_lists_input is not None:
         
         def render_q_list(tab_obj, sheet_name, cols, title, key):
             with tab_obj:
-                st.subheader(title)
+                st.markdown(f"### 📋 {title}")
+                st.caption("يمكنك إضافة صفوف جديدة بالنقر على زر (+) في أسفل الجدول")
+                st.divider()
+                
                 full_cols = cols + ["المعهد", "الفترة"]
                 data = load_sheet_data(sheet_name, full_cols)
+                
                 if not data.empty and "المعهد" in data.columns and "الفترة" in data.columns:
                     data = data[
                         (data["المعهد"] == st.session_state.institute) &
@@ -960,12 +1028,26 @@ if tab_q_lists_input is not None:
                 else:
                     data = pd.DataFrame(columns=cols)
                 
-                inp = st.data_editor(
-                    data[cols] if not data.empty else pd.DataFrame(columns=cols),
-                    num_rows="dynamic", use_container_width=True, key=f"{key}_ed"
+                if not data.empty:
+                    display_df = rtl_display(data[cols])
+                else:
+                    display_df = pd.DataFrame(columns=list(reversed(cols)))
+                
+                input_df_rtl = st.data_editor(
+                    display_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"{key}_ed",
+                    hide_index=True
                 )
-                if st.button(f"💾 حفظ", key=f"{key}_sv"):
-                    save_list_data(sheet_name, inp, cols,
+                
+                if not input_df_rtl.empty:
+                    input_df = input_df_rtl[list(reversed(input_df_rtl.columns))]
+                else:
+                    input_df = input_df_rtl
+                
+                if st.button(f"💾 حفظ {title}", key=f"{key}_sv"):
+                    save_list_data(sheet_name, input_df, cols,
                                    st.session_state.institute, "الفترة", ql_period)
         
         render_q_list(q_tabs[0], "Q_مشاريع_فردية", Q_STUDIES_INDIV, "مشاريع فردية", "q1")
@@ -1021,30 +1103,34 @@ if 'tab_m_dashboard' in dir() and tab_m_dashboard is not None:
             if "المعهد" in df_monthly.columns:
                 c1, c2 = st.columns(2)
                 with c1:
+                    st.markdown("#### 📚 الدراسات الجارية")
                     fig = px.bar(df_monthly, x="المعهد",
                                 y=["دراسات خطة بحثية جارية", "دراسات استشارية جارية",
                                    "دراسات بتمويل ذاتي جارية"],
-                                title="الدراسات الجارية", barmode="group")
+                                barmode="group")
                     st.plotly_chart(fig, use_container_width=True)
                 with c2:
+                    st.markdown("#### 📄 التقارير")
                     fig = px.bar(df_monthly, x="المعهد",
                                 y=["تقرير مرحلي", "تقرير نهائي", "تقرير معاينة",
                                    "تقرير معايرة", "تقرير أخرى"],
-                                title="التقارير", barmode="stack")
+                                barmode="stack")
                     st.plotly_chart(fig, use_container_width=True)
                 
                 c1, c2 = st.columns(2)
                 with c1:
+                    st.markdown("#### 👥 التدريب")
                     fig = px.bar(df_monthly, x="المعهد",
                                 y=["متدربين", "مدربين"],
-                                title="التدريب", barmode="group")
+                                barmode="group")
                     st.plotly_chart(fig, use_container_width=True)
                 with c2:
+                    st.markdown("#### 🤝 الاجتماعات")
                     fig = px.bar(df_monthly, x="المعهد",
                                 y=["اجتماعات بالوزارة", "اجتماعات بالمركز",
                                    "اجتماعات جهات خارجية", "اجتماعات مع العاملين",
                                    "اجتماعات جهات أخرى"],
-                                title="الاجتماعات", barmode="stack")
+                                barmode="stack")
                     st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("📭 لا توجد بيانات شهرية")
@@ -1121,96 +1207,107 @@ if tab_q_dashboard is not None:
         st.markdown("## 1️⃣ الأداء التنفيذي للخطة البحثية")
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("#### 📚 عدد المشاريع البحثية")
             fig = px.bar(fq, x="المعهد",
                         y=["فردي - عدد المشاريع", "مشترك - عدد المشاريع"],
-                        barmode="group", title="عدد المشاريع البحثية")
+                        barmode="group")
             st.plotly_chart(fig, use_container_width=True)
         with c2:
+            st.markdown("#### 📊 نسب التنفيذ والمشاركة")
             fig = px.bar(fq, x="المعهد",
                         y=["فردي - نسبة المنفذ %", "مشترك - نسبة المنفذ %",
                            "مشترك - نسبة المشاركة %"],
-                        barmode="group", title="نسب التنفيذ والمشاركة")
+                        barmode="group")
             st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("## 2️⃣ الاستشارات والدراسات خارج الخطة")
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("#### 💼 المشاريع خارج الخطة")
             fig = px.bar(fq, x="المعهد",
                         y=["مشاريع ممولة محلياً", "مشاريع ممولة دولياً",
                            "تكليفات من الوزارة", "استشارات من الوزارة",
                            "استشارات من جهات حكومية/خاصة"],
-                        barmode="stack", title="المشاريع خارج الخطة")
+                        barmode="stack")
             st.plotly_chart(fig, use_container_width=True)
         with c2:
+            st.markdown("#### 📋 المقترحات البحثية")
             fig = px.bar(fq, x="المعهد",
                         y=["مقترحات محلية", "مقترحات دولية",
                            "مقترحات للوزارة", "مقترحات خارج الوزارة"],
-                        barmode="stack", title="المقترحات البحثية")
+                        barmode="stack")
             st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("## 3️⃣ التعاون الداخلي والخارجي")
+        st.markdown("#### 🤝 أوجه التعاون")
         fig = px.bar(fq, x="المعهد",
                     y=["تعاون داخلي مع المعاهد",
                        "تعاون داخلي مع جهات خارج المعاهد",
                        "تعاون خارجي مع جهات أجنبية"],
-                    barmode="group", title="أوجه التعاون")
+                    barmode="group")
         st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("## 4️⃣ الإنتاج العلمي والنشر والابتكار")
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("#### 🔬 الأبحاث والنشر")
             fig = px.bar(fq, x="المعهد",
                         y=["أبحاث منشورة", "أبحاث في مجلات متميزة Q1/Q2",
                            "أبحاث حصلت على موافقة النشر"],
-                        barmode="group", title="الأبحاث والنشر")
+                        barmode="group")
             st.plotly_chart(fig, use_container_width=True)
         with c2:
+            st.markdown("#### 🎓 الرسائل العلمية")
             fig = px.bar(fq, x="المعهد",
                         y=["رسائل ماجستير", "رسائل دكتوراه"],
-                        barmode="group", title="الرسائل العلمية")
+                        barmode="group")
             st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("## 5️⃣ التدريب / التعليم")
+        st.markdown("#### 🎓 أنواع التدريب")
         tr_cols = [c for c in fq.columns if "- عدد" in c and c != "إجمالي التدريب - عدد"]
         if tr_cols:
-            fig = px.bar(fq, x="المعهد", y=tr_cols,
-                        barmode="stack", title="أنواع التدريب")
+            fig = px.bar(fq, x="المعهد", y=tr_cols, barmode="stack")
             st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("## 6️⃣ التمويل والأداء المالي")
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("#### 💰 مصادر التمويل (ألف ج)")
             fig = px.bar(fq, x="المعهد",
                         y=["تمويل الخطة البحثية - مبلغ",
                            "تمويل خارجي - مبلغ",
                            "المنصرف الفعلي - مبلغ"],
-                        barmode="group", title="مصادر التمويل (ألف ج)")
+                        barmode="group")
             st.plotly_chart(fig, use_container_width=True)
         with c2:
+            st.markdown("#### 📚 تمويل النشر العلمي")
             fig = px.bar(fq, x="المعهد",
                         y=["تمويل نشر علمي - دراسات",
                            "تمويل نشر علمي - أبحاث",
                            "تمويل نشر علمي - مكافآت"],
-                        barmode="stack", title="تمويل النشر العلمي")
+                        barmode="stack")
             st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("## 7️⃣ مؤشرات الأداء للموارد البشرية")
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("#### 📅 الاجتماعات الدورية")
             fig = px.bar(fq, x="المعهد",
                         y=["اجتماعات دورية مع الهيئة البحثية والعاملين",
                            "اجتماعات مجلس إدارة المعهد",
                            "اجتماعات وحدة الفكر"],
-                        barmode="group", title="الاجتماعات الدورية")
+                        barmode="group")
             st.plotly_chart(fig, use_container_width=True)
         with c2:
+            st.markdown("#### 📋 آليات التحفيز والتسويق")
             disp = fq[["المعهد", "الربع", "آليات تسويق إمكانات المعهد",
                        "آليات الثواب والعقاب"]].copy()
-            st.dataframe(disp, use_container_width=True)
+            st.dataframe(rtl_display(disp), use_container_width=True, hide_index=True)
         
         st.markdown("## 8️⃣ الاجتماعات الوزارية")
-        fig = px.bar(fq, x="المعهد", y="عدد الاجتماعات الوزارية",
-                    title="عدد الاجتماعات الوزارية", color="الربع")
+        st.markdown("#### 🏛️ عدد الاجتماعات الوزارية")
+        fig = px.bar(fq, x="المعهد", y="عدد الاجتماعات الوزارية", color="الربع")
         st.plotly_chart(fig, use_container_width=True)
         
         st.divider()
@@ -1238,7 +1335,9 @@ if tab_q_dashboard is not None:
                           f"{i_df['المنصرف الفعلي - مبلغ'].sum():.1f}")
         
         st.divider()
-        st.markdown("## 📄 الجدول الشامل")
+        st.markdown("## 📄 الجدول الشامل للتقارير الربع سنوية")
+        st.caption(f"عدد المعاهد: {fq['المعهد'].nunique()} | عدد السجلات: {len(fq)}")
+        st.divider()
         
         main_cols = ["المعهد", "الربع", "السنة المالية",
                      "فردي - عدد المشاريع", "مشترك - عدد المشاريع",
@@ -1248,7 +1347,7 @@ if tab_q_dashboard is not None:
                      "تمويل الخطة البحثية - مبلغ", "تمويل خارجي - مبلغ",
                      "عدد الاجتماعات الوزارية"]
         disp_cols = [c for c in main_cols if c in fq.columns]
-        st.dataframe(fq[disp_cols], use_container_width=True)
+        st.dataframe(rtl_display(fq[disp_cols]), use_container_width=True, hide_index=True)
         
         def to_excel(d):
             out = BytesIO()
@@ -1292,6 +1391,7 @@ if tab_trend is not None:
             ] if m in df_t.columns]
             
             if avail_metrics:
+                st.markdown("### 📊 اختر المؤشر لعرض التغير")
                 metric = st.selectbox("اختر المؤشر", avail_metrics, key="trend_m")
                 
                 if st.session_state.role == "admin" and "المعهد" in df_t.columns:
@@ -1339,7 +1439,11 @@ if tab_data is not None:
             if "الشهر" in fd.columns and fm:
                 fd = fd[fd["الشهر"].isin(fm)]
             
-            st.dataframe(fd, use_container_width=True)
+            st.markdown("### 📊 جدول البيانات الشهرية")
+            st.caption(f"عدد السجلات: {len(fd)} | عدد الأعمدة: {len(fd.columns)}")
+            st.divider()
+            
+            st.dataframe(rtl_display(fd), use_container_width=True, hide_index=True)
             
             def to_excel_m(d):
                 out = BytesIO()
@@ -1386,8 +1490,10 @@ if tab_lists is not None:
             "👥 تحسين الأداء"
         ])
         
-        def view_list(tab_obj, sheet_name, cols, key):
+        def view_list(tab_obj, sheet_name, cols, title, key):
             with tab_obj:
+                st.markdown(f"### 📋 {title}")
+                
                 full = cols + ["المعهد", "الفترة"]
                 data = load_sheet_data(sheet_name, full)
                 if data.empty:
@@ -1400,12 +1506,14 @@ if tab_lists is not None:
                 if data.empty:
                     st.info("لا توجد بيانات للفترة المحددة")
                 else:
-                    st.dataframe(data[cols], use_container_width=True)
+                    st.caption(f"عدد السجلات: {len(data)}")
+                    st.divider()
+                    st.dataframe(rtl_display(data[cols]), use_container_width=True, hide_index=True)
         
-        view_list(v_tabs[0], "الدراسات_البحثية", STUDIES_COLUMNS, "v1")
-        view_list(v_tabs[1], "مشروعات_ممولة", PROJECTS_COLUMNS, "v2")
-        view_list(v_tabs[2], "استشارات_ممولة", CONSULT_COLUMNS, "v3")
-        view_list(v_tabs[3], "التقارير_الفنية", REPORTS_COLUMNS, "v4")
-        view_list(v_tabs[4], "الاجتماعات", MEETINGS_COLUMNS, "v5")
-        view_list(v_tabs[5], "التدريب", TRAINING_COLUMNS, "v6")
-        view_list(v_tabs[6], "اجتماعات_تحسين_الأداء", PERF_MEETINGS_COLUMNS, "v7")
+        view_list(v_tabs[0], "الدراسات_البحثية", STUDIES_COLUMNS, "الدراسات البحثية", "v1")
+        view_list(v_tabs[1], "مشروعات_ممولة", PROJECTS_COLUMNS, "المشروعات الممولة", "v2")
+        view_list(v_tabs[2], "استشارات_ممولة", CONSULT_COLUMNS, "الاستشارات الممولة", "v3")
+        view_list(v_tabs[3], "التقارير_الفنية", REPORTS_COLUMNS, "التقارير الفنية", "v4")
+        view_list(v_tabs[4], "الاجتماعات", MEETINGS_COLUMNS, "الاجتماعات", "v5")
+        view_list(v_tabs[5], "التدريب", TRAINING_COLUMNS, "التدريب والندوات", "v6")
+        view_list(v_tabs[6], "اجتماعات_تحسين_الأداء", PERF_MEETINGS_COLUMNS, "اجتماعات تحسين الأداء", "v7")
