@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from io import BytesIO
 import streamlit as st
 from datetime import datetime
+import time
 
 # ============================================================
 # إعداد الصفحة
@@ -31,11 +32,11 @@ html, body, [class*="css"] { direction: rtl; text-align: right; }
 """, unsafe_allow_html=True)
 
 # ============================================================
-# الاتصال بـ Google Sheets
+# الاتصال بـ Google Sheets (مع Cache)
 # ============================================================
 SPREADSHEET_KEY = "1QSfmNo9U0TNvdwRgLhLBgVNZbiL8wVcoWlffBz6cSfg"
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def get_client():
     scope = [
         "https://spreadsheets.google.com/feeds",
@@ -46,23 +47,70 @@ def get_client():
     )
     return gspread.authorize(creds)
 
+@st.cache_resource(show_spinner=False)
 def get_spreadsheet():
     return get_client().open_by_key(SPREADSHEET_KEY)
 
-def get_or_create_sheet(sheet_name, headers=None):
+@st.cache_resource(show_spinner=False)
+def get_worksheet(sheet_name):
+    """الحصول على ورقة عمل مع Cache - تقليل الطلبات"""
     try:
         ss = get_spreadsheet()
         try:
-            ws = ss.worksheet(sheet_name)
+            return ss.worksheet(sheet_name)
         except gspread.WorksheetNotFound:
+            return None
+    except Exception:
+        return None
+
+def get_or_create_sheet(sheet_name, headers=None):
+    """الحصول على ورقة أو إنشاؤها مع Cache"""
+    ws = get_worksheet(sheet_name)
+    if ws is None:
+        try:
+            ss = get_spreadsheet()
             ws = ss.add_worksheet(title=sheet_name, rows=1000, cols=30)
             if headers:
                 ws.append_row(headers)
-        return ws
-    except Exception as e:
-        st.error(f"خطأ في الاتصال: {e}")
-        return None
+            # مسح الـ cache لإعادة التحميل
+            get_worksheet.clear()
+            return ws
+        except Exception as e:
+            st.error(f"خطأ في إنشاء الورقة {sheet_name}: {e}")
+            return None
+    return ws
 
+# ============================================================
+# دالة قراءة البيانات مع Cache و retry
+# ============================================================
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_sheet_data(sheet_name, _cache_bust=0):
+    """قراءة بيانات ورقة مع Cache لمدة 60 ثانية"""
+    try:
+        ws = get_worksheet(sheet_name)
+        if ws is None:
+            return []
+        
+        # إعادة محاولة عند الخطأ
+        for attempt in range(3):
+            try:
+                return ws.get_all_values()
+            except gspread.exceptions.APIError as e:
+                if "429" in str(e) or "Quota" in str(e):
+                    time.sleep(2 ** attempt)  # 1s, 2s, 4s
+                    continue
+                raise
+        return []
+    except Exception:
+        return []
+
+def invalidate_cache():
+    """مسح ذاكرة التخزين المؤقت للبيانات"""
+    fetch_sheet_data.clear()
+
+# ============================================================
+# دوال مساعدة
+# ============================================================
 def fix_encoding(text):
     if isinstance(text, str):
         try:
@@ -71,19 +119,97 @@ def fix_encoding(text):
             return text
     return text
 
+def load_sheet_data(sheet_name, columns):
+    """تحميل بيانات ورقة كـ DataFrame"""
+    try:
+        get_or_create_sheet(sheet_name, columns)
+        all_values = fetch_sheet_data(sheet_name)
+        
+        if len(all_values) <= 1:
+            return pd.DataFrame(columns=columns)
+        
+        headers = [fix_encoding(h) for h in all_values[0]]
+        df = pd.DataFrame(all_values[1:], columns=headers)
+        
+        # إصلاح الترميز للقوائم النصية فقط
+        for col in df.columns:
+            if df[col].dtype == 'object' and col not in columns:
+                df[col] = df[col].apply(fix_encoding)
+        
+        return df
+    except Exception:
+        return pd.DataFrame(columns=columns)
+
+def safe_sum(df, column):
+    if df.empty or column not in df.columns:
+        return 0
+    return int(pd.to_numeric(df[column], errors='coerce').fillna(0).sum())
+
+def save_list_data(sheet_name, input_df, base_columns, institute, period_key, period_val):
+    """حفظ قائمة نصية"""
+    try:
+        full_cols = base_columns + ["المعهد", period_key]
+        ws = get_or_create_sheet(sheet_name, full_cols)
+        
+        if ws is None:
+            st.error("فشل الاتصال بالورقة")
+            return
+        
+        # قراءة البيانات الموجودة
+        all_values = ws.get_all_values()
+        
+        # حذف الصفوف القديمة لنفس المعهد/الفترة
+        kept_rows = []
+        if len(all_values) > 1:
+            existing = pd.DataFrame(all_values[1:], columns=all_values[0])
+            if "المعهد" in existing.columns and period_key in existing.columns:
+                mask = ~(
+                    (existing["المعهد"] == institute) &
+                    (existing[period_key] == period_val)
+                )
+                kept_rows = existing[mask].values.tolist()
+        
+        # إعادة الكتابة
+        ws.clear()
+        ws.append_row(full_cols)
+        
+        # إضافة الصفوف المحفوظة (بشكل مجمع)
+        if kept_rows:
+            rows_to_add = [[str(v) for v in r] for r in kept_rows]
+            ws.append_rows(rows_to_add)
+        
+        # إضافة الصفوف الجديدة (بشكل مجمع)
+        new_rows = []
+        for _, row in input_df.iterrows():
+            vals = [str(v) if pd.notna(v) else "" for v in row.tolist()]
+            if all(v.strip() in ["", "nan", "None"] for v in vals):
+                continue
+            new_rows.append(vals + [institute, period_val])
+        
+        if new_rows:
+            ws.append_rows(new_rows)
+        
+        # مسح الـ cache
+        invalidate_cache()
+        
+        st.success(f"✅ تم حفظ البيانات في {sheet_name}")
+        st.balloons()
+        time.sleep(0.5)
+        st.rerun()
+    except Exception as e:
+        st.error(f"❌ خطأ في الحفظ: {e}")
+
 # ============================================================
-# الأعمدة - البيانات الشهرية
+# الأعمدة
 # ============================================================
 MONTHLY_COLUMNS = [
     "المعهد", "المستخدم", "الشهر", "السنة",
     "دراسات خطة بحثية جارية", "دراسات استشارية جارية", "دراسات بتمويل ذاتي جارية",
     "إجمالي الدراسات الجارية",
     "تقرير مرحلي", "تقرير نهائي", "تقرير معاينة", "تقرير معايرة", "تقرير أخرى",
-    "إجمالي التقارير",
-    "عدد المذكرات",
+    "إجمالي التقارير", "عدد المذكرات",
     "مقترحات استشارات", "مقترحات تمويل أبحاث", "إجمالي المقترحات",
-    "إجمالي عدد المأموريات", "إجمالي عدد أيام المأموريات",
-    "إجمالي عدد المعاينات",
+    "إجمالي عدد المأموريات", "إجمالي عدد أيام المأموريات", "إجمالي عدد المعاينات",
     "متدربين", "مدربين",
     "أيام تدريب متدربين داخل المعهد", "أيام تدريب متدربين خارج المعهد",
     "مشتركين مؤتمرات", "مشتركين ورش عمل", "إجمالي المشاركين في أنشطة علمية",
@@ -99,25 +225,18 @@ MONTHLY_COLUMNS = [
     "المبلغ المنصرف من الموازنة الاستثمارية"
 ]
 
-# ============================================================
-# الأعمدة - البيانات الربع سنوية (كاملة)
-# ============================================================
 QUARTERLY_COLUMNS = [
     "المعهد", "المستخدم", "الربع", "السنة المالية",
-    # 1. الأداء التنفيذي
     "فردي - عدد المشاريع", "فردي - نسبة المنفذ %", "فردي - عدد التقارير",
     "مشترك - عدد المشاريع", "مشترك - نسبة المنفذ %",
     "مشترك - نسبة المشاركة %", "مشترك - عدد التقارير",
-    # 2. الاستشارات
     "مشاريع ممولة محلياً", "مشاريع ممولة دولياً", "تكليفات من الوزارة",
     "استشارات من الوزارة", "استشارات من جهات حكومية/خاصة",
     "إجمالي المشاريع خارج الخطة",
     "مقترحات محلية", "مقترحات دولية", "مقترحات للوزارة", "مقترحات خارج الوزارة",
     "إجمالي المقترحات",
-    # 3. التعاون
     "تعاون داخلي مع المعاهد", "تعاون داخلي مع جهات خارج المعاهد",
     "تعاون خارجي مع جهات أجنبية",
-    # 4. الإنتاج العلمي
     "أبحاث منشورة", "أبحاث في مجلات متميزة Q1/Q2",
     "أبحاث حصلت على موافقة النشر", "أبحاث حصلت على مكافأة نشر",
     "باحثون حصلوا على مكافأة نشر",
@@ -126,7 +245,6 @@ QUARTERLY_COLUMNS = [
     "إشراف/تحكيم رسائل لباحثي المعهد",
     "إشراف/تحكيم رسائل لباحثين خارج المعهد",
     "عضوية في منظمات دولية", "عضوية في منظمات محلية",
-    # 5. التدريب
     "دورات بالداخل - عدد", "دورات بالداخل - متدربين",
     "دورات بالخارج - عدد", "دورات بالخارج - متدربين",
     "دورات online - عدد", "دورات online - متدربين",
@@ -136,23 +254,17 @@ QUARTERLY_COLUMNS = [
     "مؤتمرات بالخارج - عدد", "مؤتمرات بالخارج - متدربين",
     "دورات نظمها المعهد - عدد", "دورات نظمها المعهد - متدربين",
     "إجمالي التدريب - عدد", "إجمالي التدريب - متدربين",
-    # 6. التمويل
     "تمويل الخطة البحثية - مبلغ", "تمويل الخطة البحثية - نسبة %",
     "تمويل خارجي - مبلغ", "تمويل خارجي - نسبة %",
     "المنصرف الفعلي - مبلغ", "المنصرف الفعلي - نسبة %",
     "تمويل نشر علمي - دراسات", "تمويل نشر علمي - أبحاث",
     "تمويل نشر علمي - مكافآت", "إجمالي تمويل النشر العلمي",
-    # 7. الموارد البشرية
     "اجتماعات دورية مع الهيئة البحثية والعاملين",
     "اجتماعات مجلس إدارة المعهد", "اجتماعات وحدة الفكر",
     "آليات تسويق إمكانات المعهد", "آليات الثواب والعقاب",
-    # 8. الاجتماعات الوزارية
     "عدد الاجتماعات الوزارية", "ملاحظات عامة"
 ]
 
-# ============================================================
-# أعمدة القوائم النصية الشهرية
-# ============================================================
 STUDIES_COLUMNS = ["م", "عنوان الدراسة", "الجهة المستفيدة", "تاريخ إصدار التقرير", "ملخص التقرير"]
 PROJECTS_COLUMNS = ["م", "عنوان المشروع", "الجهة المستفيدة", "تاريخ إصدار التقرير", "ملخص التقرير"]
 CONSULT_COLUMNS = ["م", "عنوان الاستشارة", "الجهة المستفيدة", "تاريخ إصدار التقرير", "ملخص التقرير"]
@@ -165,7 +277,6 @@ TRAINING_COLUMNS = ["م", "عنوان البرنامج", "النوع", "عدد �
 PERF_MEETINGS_COLUMNS = ["م", "التاريخ", "عنوان الاجتماع",
                          "الغرض من الاجتماع", "السادة الحضور"]
 
-# أعمدة القوائم الربع سنوية
 Q_STUDIES_INDIV = ["م", "عنوان المشروع البحثي", "نسبة المنفذ %",
                    "عدد التقارير", "هدف الدراسة", "النتائج"]
 Q_STUDIES_JOINT = ["م", "عنوان المشروع البحثي", "نسبة المنفذ %",
@@ -207,61 +318,6 @@ USERS = {
 }
 
 # ============================================================
-# الدوال المساعدة
-# ============================================================
-def load_sheet_data(sheet_name, columns):
-    try:
-        ws = get_or_create_sheet(sheet_name, columns)
-        all_values = ws.get_all_values()
-        if len(all_values) <= 1:
-            return pd.DataFrame(columns=all_values[0] if all_values else columns)
-        return pd.DataFrame(all_values[1:], columns=all_values[0])
-    except Exception:
-        return pd.DataFrame(columns=columns)
-
-def safe_sum(df, column):
-    if df.empty or column not in df.columns:
-        return 0
-    return int(pd.to_numeric(df[column], errors='coerce').fillna(0).sum())
-
-def save_list_data(sheet_name, input_df, base_columns, institute, period_key, period_val):
-    """حفظ قائمة نصية مع مراعاة المعهد والفترة"""
-    try:
-        full_cols = base_columns + ["المعهد", period_key]
-        ws = get_or_create_sheet(sheet_name, full_cols)
-        all_values = ws.get_all_values()
-        
-        # حذف الصفوف القديمة لنفس المعهد/الفترة
-        kept_rows = []
-        if len(all_values) > 1:
-            existing = pd.DataFrame(all_values[1:], columns=all_values[0])
-            if "المعهد" in existing.columns and period_key in existing.columns:
-                mask = ~(
-                    (existing["المعهد"] == institute) &
-                    (existing[period_key] == period_val)
-                )
-                kept_rows = existing[mask].values.tolist()
-        
-        # إعادة الكتابة
-        ws.clear()
-        ws.append_row(full_cols)
-        for row in kept_rows:
-            ws.append_row([str(v) for v in row])
-        
-        # إضافة الجديدة
-        for _, row in input_df.iterrows():
-            vals = [str(v) if pd.notna(v) else "" for v in row.tolist()]
-            if all(v.strip() in ["", "nan", "None"] for v in vals):
-                continue
-            ws.append_row(vals + [institute, period_val])
-        
-        st.success(f"✅ تم حفظ البيانات في {sheet_name}")
-        st.balloons()
-        st.rerun()
-    except Exception as e:
-        st.error(f"❌ خطأ في الحفظ: {e}")
-
-# ============================================================
 # Session State
 # ============================================================
 if "logged_in" not in st.session_state:
@@ -290,15 +346,20 @@ if not st.session_state.logged_in:
 # ============================================================
 # بعد تسجيل الدخول
 # ============================================================
-st.success(f"👤 مرحباً **{st.session_state.username}** — 🏢 {st.session_state.institute}")
-
-c_logout = st.columns([6, 1])
-with c_logout[1]:
-    if st.button("🚪 تسجيل خروج"):
+c_header = st.columns([5, 1, 1])
+with c_header[0]:
+    st.success(f"👤 مرحباً **{st.session_state.username}** — 🏢 {st.session_state.institute}")
+with c_header[1]:
+    if st.button("🔄 تحديث البيانات"):
+        invalidate_cache()
+        st.rerun()
+with c_header[2]:
+    if st.button("🚪 خروج"):
         st.session_state.clear()
+        invalidate_cache()
         st.rerun()
 
-# تحميل البيانات الشهرية
+# تحميل البيانات الشهرية مرة واحدة فقط
 df_monthly = load_sheet_data("KPI_Data", MONTHLY_COLUMNS)
 if not df_monthly.empty and st.session_state.role != "admin" and "المعهد" in df_monthly.columns:
     df_monthly = df_monthly[df_monthly["المعهد"] == st.session_state.institute]
@@ -317,6 +378,7 @@ if st.session_state.role == "admin":
     tab_input = None
     tab_q_input = None
     tab_lists_input = None
+    tab_q_lists_input = None
 else:
     tabs = st.tabs([
         "📥 إدخال شهري",
@@ -356,7 +418,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # الدراسات
         st.subheader("📚 الدراسات الجارية")
         c1, c2, c3 = st.columns(3)
         rs = c1.number_input("خطة بحثية", min_value=0, key="rs")
@@ -367,7 +428,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # التقارير
         st.subheader("📄 التقارير الصادرة")
         c1, c2, c3, c4, c5 = st.columns(5)
         r1 = c1.number_input("مرحلي", min_value=0, key="r1")
@@ -380,7 +440,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # المذكرات والمقترحات
         st.subheader("📋 المذكرات والمقترحات")
         c1, c2, c3 = st.columns(3)
         memos = c1.number_input("عدد المذكرات", min_value=0, key="memos")
@@ -391,7 +450,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # المأموريات والمعاينات
         st.subheader("🏃 المأموريات والمعاينات")
         c1, c2, c3 = st.columns(3)
         missions = c1.number_input("إجمالي عدد المأموريات", min_value=0, key="miss")
@@ -400,7 +458,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # التدريب
         st.subheader("👥 التدريب")
         c1, c2, c3, c4 = st.columns(4)
         trainees = c1.number_input("متدربين", min_value=0, key="tr")
@@ -410,7 +467,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # الأنشطة العلمية
         st.subheader("🔬 الأنشطة العلمية")
         c1, c2 = st.columns(2)
         conf = c1.number_input("مشتركين مؤتمرات", min_value=0, key="conf")
@@ -419,7 +475,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # الاجتماعات
         st.subheader("🤝 الاجتماعات")
         c1, c2, c3, c4, c5 = st.columns(5)
         mt1 = c1.number_input("بالوزارة", min_value=0, key="mt1")
@@ -431,7 +486,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # الأوراق البحثية
         st.subheader("📝 الأوراق البحثية والرسائل")
         c1, c2, c3, c4 = st.columns(4)
         pp = c1.number_input("أوراق منشورة", min_value=0, key="pp")
@@ -441,7 +495,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # العاملون
         st.subheader("👤 عدد العاملين بالمعهد")
         c1, c2, c3 = st.columns(3)
         tot_staff = c1.number_input("إجمالي العاملين الفعلي", min_value=0, key="ts")
@@ -462,7 +515,6 @@ if tab_input is not None:
         
         st.divider()
         
-        # بيانات إضافية
         st.subheader("💰 بيانات إضافية")
         c1, c2, c3 = st.columns(3)
         revenues = c1.number_input("إجمالي الإيرادات الذاتية", min_value=0.0, format="%.2f", key="rev")
@@ -474,6 +526,8 @@ if tab_input is not None:
         if st.button("💾 حفظ البيانات الشهرية", type="primary", key="save_monthly"):
             try:
                 ws = get_or_create_sheet("KPI_Data", MONTHLY_COLUMNS)
+                
+                # منع التكرار
                 all_values = ws.get_all_values()
                 if len(all_values) > 1:
                     existing = pd.DataFrame(all_values[1:], columns=all_values[0])
@@ -529,8 +583,10 @@ if tab_input is not None:
                 
                 row = [str(data.get(c, "0")) for c in MONTHLY_COLUMNS]
                 ws.append_row(row)
+                invalidate_cache()
                 st.success("✅ تم حفظ البيانات الشهرية بنجاح")
                 st.balloons()
+                time.sleep(0.5)
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ خطأ: {e}")
@@ -555,7 +611,6 @@ if tab_q_input is not None:
         
         st.divider()
         
-        # 1. الأداء التنفيذي
         st.subheader("1️⃣ الأداء التنفيذي للخطة البحثية")
         with st.expander("1-1-1 مشروع فردي خاص بالمعهد", expanded=True):
             c1, c2, c3 = st.columns(3)
@@ -575,7 +630,6 @@ if tab_q_input is not None:
         
         st.divider()
         
-        # 2. الاستشارات
         st.subheader("2️⃣ الاستشارات والدراسات خارج الخطة")
         c1, c2, c3 = st.columns(3)
         q_local = c1.number_input("مشاريع ممولة محلياً (STDF)", min_value=0, key="q_loc")
@@ -599,7 +653,6 @@ if tab_q_input is not None:
         
         st.divider()
         
-        # 3. التعاون
         st.subheader("3️⃣ التعاون الداخلي والخارجي")
         c1, c2, c3 = st.columns(3)
         q_col_in = c1.number_input("تعاون داخلي مع المعاهد", min_value=0, key="q_cin")
@@ -608,7 +661,6 @@ if tab_q_input is not None:
         
         st.divider()
         
-        # 4. الإنتاج العلمي
         st.subheader("4️⃣ الإنتاج العلمي والنشر والابتكار")
         c1, c2, c3, c4 = st.columns(4)
         q_pub = c1.number_input("أبحاث منشورة", min_value=0, key="q_pub")
@@ -632,7 +684,6 @@ if tab_q_input is not None:
         
         st.divider()
         
-        # 5. التدريب
         st.subheader("5️⃣ التدريب / التعليم")
         training_types = [
             ("دورات بالداخل", "tr_in"),
@@ -662,7 +713,6 @@ if tab_q_input is not None:
         
         st.divider()
         
-        # 6. التمويل
         st.subheader("6️⃣ التمويل والأداء المالي")
         c1, c2 = st.columns(2)
         q_rf_amt = c1.number_input("تمويل الخطة البحثية (ألف ج)", min_value=0.0, format="%.2f", key="q_rfa")
@@ -688,7 +738,6 @@ if tab_q_input is not None:
         
         st.divider()
         
-        # 7. الموارد البشرية
         st.subheader("7️⃣ مؤشرات الأداء للموارد البشرية")
         c1, c2, c3 = st.columns(3)
         q_per_meet = c1.number_input("اجتماعات دورية مع الهيئة والعاملين", min_value=0, key="q_pm")
@@ -700,7 +749,6 @@ if tab_q_input is not None:
         
         st.divider()
         
-        # 8. الاجتماعات الوزارية
         st.subheader("8️⃣ الاجتماعات الوزارية")
         q_min_meet = st.number_input("عدد الاجتماعات الوزارية", min_value=0, key="q_mm")
         q_notes = st.text_area("ملاحظات عامة", height=80, key="q_nt")
@@ -795,8 +843,10 @@ if tab_q_input is not None:
                 
                 row = [str(data.get(c, "")) for c in QUARTERLY_COLUMNS]
                 ws.append_row(row)
+                invalidate_cache()
                 st.success("✅ تم حفظ البيانات الربع سنوية بنجاح")
                 st.balloons()
+                time.sleep(0.5)
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ خطأ: {e}")
@@ -819,7 +869,6 @@ if tab_lists_input is not None:
                                       value=2026, key="ml_y")
         
         period_val = f"{ml_month} {ml_year}"
-        
         st.info(f"📌 {st.session_state.institute} — {period_val}")
         st.divider()
         
@@ -834,6 +883,7 @@ if tab_lists_input is not None:
                 st.subheader(title)
                 full_cols = base_cols + ["المعهد", "الفترة"]
                 data = load_sheet_data(sheet_name, full_cols)
+                
                 if not data.empty and "المعهد" in data.columns and "الفترة" in data.columns:
                     data = data[
                         (data["المعهد"] == st.session_state.institute) &
@@ -847,7 +897,7 @@ if tab_lists_input is not None:
                     num_rows="dynamic", use_container_width=True, key=f"{key_prefix}_ed"
                 )
                 
-                if st.button(f"💾 حفظ {title}", key=f"{key_prefix}_sv"):
+                if st.button(f"💾 حفظ", key=f"{key_prefix}_sv"):
                     save_list_data(sheet_name, input_df, base_cols,
                                    st.session_state.institute, "الفترة", period_val)
         
@@ -869,7 +919,7 @@ if tab_lists_input is not None:
 # ============================================================
 # 📋 إدخال القوائم الربع سنوية
 # ============================================================
-if tab_q_input is not None:
+if tab_q_lists_input is not None:
     with tab_q_lists_input:
         st.header("📋 إدخال القوائم الربع سنوية")
         
@@ -887,14 +937,14 @@ if tab_q_input is not None:
         st.divider()
         
         q_tabs = st.tabs([
-            "1-1 مشاريع فردية", "1-2 مشاريع مشتركة",
-            "2-1-1 ممولة محلياً", "2-1-2 ممولة دولياً",
-            "2-1-3 تكليفات وزارة", "2-1-4 استشارات وزارة",
+            "1-1 فردية", "1-2 مشتركة",
+            "2-1-1 محلياً", "2-1-2 دولياً",
+            "2-1-3 تكليفات", "2-1-4 استشارات",
             "2-2-1 مقترحات محلية", "2-2-2 مقترحات دولية",
-            "2-2-3 مقترحات للوزارة", "2-2-4 مقترحات خارج الوزارة",
+            "2-2-3 مقترحات للوزارة", "2-2-4 مقترحات خارجية",
             "3-1 تعاون داخلي", "3-2 تعاون خارجي",
-            "4-1 الأبحاث المنشورة", "4-2 عضويات دولية", "4-3 عضويات محلية",
-            "8 الاجتماعات الوزارية"
+            "4-1 أبحاث", "4-2 عضويات دولية", "4-3 عضويات محلية",
+            "8 اجتماعات وزارية"
         ])
         
         def render_q_list(tab_obj, sheet_name, cols, title, key):
@@ -918,38 +968,22 @@ if tab_q_input is not None:
                     save_list_data(sheet_name, inp, cols,
                                    st.session_state.institute, "الفترة", ql_period)
         
-        render_q_list(q_tabs[0], "Q_مشاريع_فردية", Q_STUDIES_INDIV,
-                     "مشاريع الخطة البحثية - فردية", "q1")
-        render_q_list(q_tabs[1], "Q_مشاريع_مشتركة", Q_STUDIES_JOINT,
-                     "مشاريع مشتركة مع معاهد", "q2")
-        render_q_list(q_tabs[2], "Q_ممولة_محلياً", Q_FUNDED_LOCAL,
-                     "مشاريع ممولة محلياً", "q3")
-        render_q_list(q_tabs[3], "Q_ممولة_دولياً", Q_FUNDED_INTL,
-                     "مشاريع ممولة دولياً", "q4")
-        render_q_list(q_tabs[4], "Q_تكليفات_وزارة", Q_MINISTRY_ASSIGN,
-                     "تكليفات من الوزارة", "q5")
-        render_q_list(q_tabs[5], "Q_استشارات_وزارة", Q_MINISTRY_CONSULT,
-                     "استشارات من الوزارة", "q6")
-        render_q_list(q_tabs[6], "Q_مقترحات_محلية", Q_PROPOSALS_LOCAL,
-                     "مقترحات محلية", "q7")
-        render_q_list(q_tabs[7], "Q_مقترحات_دولية", Q_PROPOSALS_INTL,
-                     "مقترحات دولية", "q8")
-        render_q_list(q_tabs[8], "Q_مقترحات_وزارة", Q_PROPOSALS_MINISTRY,
-                     "مقترحات للوزارة", "q9")
-        render_q_list(q_tabs[9], "Q_مقترحات_خارج_الوزارة", Q_PROPOSALS_OUTSIDE,
-                     "مقترحات خارج الوزارة", "q10")
-        render_q_list(q_tabs[10], "Q_تعاون_داخلي", Q_COLLAB_INTERNAL,
-                     "التعاون الداخلي", "q11")
-        render_q_list(q_tabs[11], "Q_تعاون_خارجي", Q_COLLAB_EXTERNAL,
-                     "التعاون الخارجي", "q12")
-        render_q_list(q_tabs[12], "Q_أبحاث_منشورة", Q_PUBLICATIONS,
-                     "الأبحاث المنشورة", "q13")
-        render_q_list(q_tabs[13], "Q_عضويات_دولية", Q_ORGS_INTL,
-                     "العضويات الدولية", "q14")
-        render_q_list(q_tabs[14], "Q_عضويات_محلية", Q_ORGS_LOCAL,
-                     "العضويات المحلية", "q15")
-        render_q_list(q_tabs[15], "Q_اجتماعات_وزارية", Q_MINISTRY_MEETINGS,
-                     "الاجتماعات الوزارية", "q16")
+        render_q_list(q_tabs[0], "Q_مشاريع_فردية", Q_STUDIES_INDIV, "مشاريع فردية", "q1")
+        render_q_list(q_tabs[1], "Q_مشاريع_مشتركة", Q_STUDIES_JOINT, "مشاريع مشتركة", "q2")
+        render_q_list(q_tabs[2], "Q_ممولة_محلياً", Q_FUNDED_LOCAL, "ممولة محلياً", "q3")
+        render_q_list(q_tabs[3], "Q_ممولة_دولياً", Q_FUNDED_INTL, "ممولة دولياً", "q4")
+        render_q_list(q_tabs[4], "Q_تكليفات_وزارة", Q_MINISTRY_ASSIGN, "تكليفات وزارة", "q5")
+        render_q_list(q_tabs[5], "Q_استشارات_وزارة", Q_MINISTRY_CONSULT, "استشارات وزارة", "q6")
+        render_q_list(q_tabs[6], "Q_مقترحات_محلية", Q_PROPOSALS_LOCAL, "مقترحات محلية", "q7")
+        render_q_list(q_tabs[7], "Q_مقترحات_دولية", Q_PROPOSALS_INTL, "مقترحات دولية", "q8")
+        render_q_list(q_tabs[8], "Q_مقترحات_وزارة", Q_PROPOSALS_MINISTRY, "مقترحات للوزارة", "q9")
+        render_q_list(q_tabs[9], "Q_مقترحات_خارج_الوزارة", Q_PROPOSALS_OUTSIDE, "مقترحات خارج الوزارة", "q10")
+        render_q_list(q_tabs[10], "Q_تعاون_داخلي", Q_COLLAB_INTERNAL, "تعاون داخلي", "q11")
+        render_q_list(q_tabs[11], "Q_تعاون_خارجي", Q_COLLAB_EXTERNAL, "تعاون خارجي", "q12")
+        render_q_list(q_tabs[12], "Q_أبحاث_منشورة", Q_PUBLICATIONS, "أبحاث منشورة", "q13")
+        render_q_list(q_tabs[13], "Q_عضويات_دولية", Q_ORGS_INTL, "عضويات دولية", "q14")
+        render_q_list(q_tabs[14], "Q_عضويات_محلية", Q_ORGS_LOCAL, "عضويات محلية", "q15")
+        render_q_list(q_tabs[15], "Q_اجتماعات_وزارية", Q_MINISTRY_MEETINGS, "اجتماعات وزارية", "q16")
 
 # ============================================================
 # 📈 Dashboard الشهري
@@ -959,7 +993,6 @@ if 'tab_m_dashboard' in dir() and tab_m_dashboard is not None:
         st.title("📈 لوحة مؤشرات الأداء الشهرية")
         
         if not df_monthly.empty:
-            # تحويل الأعمدة
             text_cols = ["المعهد", "المستخدم", "الشهر", "السنة"]
             for col in df_monthly.columns:
                 if col not in text_cols:
@@ -967,7 +1000,7 @@ if 'tab_m_dashboard' in dir() and tab_m_dashboard is not None:
             
             st.subheader("🎯 مؤشرات رئيسية")
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("📚 الدراسات الجارية", safe_sum(df_monthly, "إجمالي الدراسات الجارية"))
+            c1.metric("📚 الدراسات", safe_sum(df_monthly, "إجمالي الدراسات الجارية"))
             c2.metric("📄 التقارير", safe_sum(df_monthly, "إجمالي التقارير"))
             c3.metric("📋 المقترحات", safe_sum(df_monthly, "إجمالي المقترحات"))
             c4.metric("🤝 الاجتماعات", safe_sum(df_monthly, "إجمالي الاجتماعات"))
@@ -979,8 +1012,8 @@ if 'tab_m_dashboard' in dir() and tab_m_dashboard is not None:
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("🏃 المأموريات", safe_sum(df_monthly, "إجمالي عدد المأموريات"))
             c2.metric("🔍 المعاينات", safe_sum(df_monthly, "إجمالي عدد المعاينات"))
-            c3.metric("📝 الأوراق البحثية", safe_sum(df_monthly, "إجمالي الأوراق البحثية"))
-            c4.metric("🎓 الرسائل العلمية", safe_sum(df_monthly, "إجمالي الرسائل"))
+            c3.metric("📝 الأوراق", safe_sum(df_monthly, "إجمالي الأوراق البحثية"))
+            c4.metric("🎓 الرسائل", safe_sum(df_monthly, "إجمالي الرسائل"))
             c5.metric("👥 العاملون", safe_sum(df_monthly, "إجمالي عدد العاملين الفعلي"))
             
             st.divider()
@@ -1017,24 +1050,26 @@ if 'tab_m_dashboard' in dir() and tab_m_dashboard is not None:
             st.info("📭 لا توجد بيانات شهرية")
 
 # ============================================================
-# 📊 لوحة التقارير الربع سنوية (احترافية للأدمن)
+# 📊 لوحة التقارير الربع سنوية
 # ============================================================
 if tab_q_dashboard is not None:
     with tab_q_dashboard:
-        st.title("📊 التقارير الربع سنوية — عرض احترافي")
+        st.title("📊 التقارير الربع سنوية")
         
         try:
-            ws = get_or_create_sheet("Quarterly_KPI", QUARTERLY_COLUMNS)
-            all_values = ws.get_all_values()
+            get_or_create_sheet("Quarterly_KPI", QUARTERLY_COLUMNS)
+            all_values = fetch_sheet_data("Quarterly_KPI")
+            
             if len(all_values) <= 1:
                 st.info("📭 لا توجد بيانات ربع سنوية")
                 st.stop()
-            df_q = pd.DataFrame(all_values[1:], columns=all_values[0])
+            
+            headers = [fix_encoding(h) for h in all_values[0]]
+            df_q = pd.DataFrame(all_values[1:], columns=headers)
         except Exception as e:
             st.error(f"خطأ في التحميل: {e}")
             st.stop()
         
-        # تحويل الأعمدة الرقمية
         q_text_cols = ["المعهد", "المستخدم", "الربع", "السنة المالية",
                        "آليات تسويق إمكانات المعهد", "آليات الثواب والعقاب",
                        "ملاحظات عامة"]
@@ -1042,7 +1077,6 @@ if tab_q_dashboard is not None:
             if col not in q_text_cols:
                 df_q[col] = pd.to_numeric(df_q[col], errors="coerce").fillna(0)
         
-        # الفلاتر
         st.markdown("### 🔍 الفلاتر")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1074,7 +1108,6 @@ if tab_q_dashboard is not None:
             st.warning("لا توجد بيانات للفلاتر المحددة")
             st.stop()
         
-        # نظرة عامة
         st.markdown("## 📌 نظرة عامة")
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("🏢 عدد المعاهد", fq["المعهد"].nunique())
@@ -1085,15 +1118,12 @@ if tab_q_dashboard is not None:
         
         st.divider()
         
-        # الأقسام الثمانية
-        # 1
         st.markdown("## 1️⃣ الأداء التنفيذي للخطة البحثية")
         c1, c2 = st.columns(2)
         with c1:
             fig = px.bar(fq, x="المعهد",
                         y=["فردي - عدد المشاريع", "مشترك - عدد المشاريع"],
-                        barmode="group", title="عدد المشاريع البحثية",
-                        color_discrete_sequence=px.colors.qualitative.Set2)
+                        barmode="group", title="عدد المشاريع البحثية")
             st.plotly_chart(fig, use_container_width=True)
         with c2:
             fig = px.bar(fq, x="المعهد",
@@ -1102,7 +1132,6 @@ if tab_q_dashboard is not None:
                         barmode="group", title="نسب التنفيذ والمشاركة")
             st.plotly_chart(fig, use_container_width=True)
         
-        # 2
         st.markdown("## 2️⃣ الاستشارات والدراسات خارج الخطة")
         c1, c2 = st.columns(2)
         with c1:
@@ -1116,10 +1145,9 @@ if tab_q_dashboard is not None:
             fig = px.bar(fq, x="المعهد",
                         y=["مقترحات محلية", "مقترحات دولية",
                            "مقترحات للوزارة", "مقترحات خارج الوزارة"],
-                        barmode="stack", title="المقترحات البحثية (Pipeline)")
+                        barmode="stack", title="المقترحات البحثية")
             st.plotly_chart(fig, use_container_width=True)
         
-        # 3
         st.markdown("## 3️⃣ التعاون الداخلي والخارجي")
         fig = px.bar(fq, x="المعهد",
                     y=["تعاون داخلي مع المعاهد",
@@ -1128,7 +1156,6 @@ if tab_q_dashboard is not None:
                     barmode="group", title="أوجه التعاون")
         st.plotly_chart(fig, use_container_width=True)
         
-        # 4
         st.markdown("## 4️⃣ الإنتاج العلمي والنشر والابتكار")
         c1, c2 = st.columns(2)
         with c1:
@@ -1143,7 +1170,6 @@ if tab_q_dashboard is not None:
                         barmode="group", title="الرسائل العلمية")
             st.plotly_chart(fig, use_container_width=True)
         
-        # 5
         st.markdown("## 5️⃣ التدريب / التعليم")
         tr_cols = [c for c in fq.columns if "- عدد" in c and c != "إجمالي التدريب - عدد"]
         if tr_cols:
@@ -1151,7 +1177,6 @@ if tab_q_dashboard is not None:
                         barmode="stack", title="أنواع التدريب")
             st.plotly_chart(fig, use_container_width=True)
         
-        # 6
         st.markdown("## 6️⃣ التمويل والأداء المالي")
         c1, c2 = st.columns(2)
         with c1:
@@ -1169,7 +1194,6 @@ if tab_q_dashboard is not None:
                         barmode="stack", title="تمويل النشر العلمي")
             st.plotly_chart(fig, use_container_width=True)
         
-        # 7
         st.markdown("## 7️⃣ مؤشرات الأداء للموارد البشرية")
         c1, c2 = st.columns(2)
         with c1:
@@ -1184,38 +1208,35 @@ if tab_q_dashboard is not None:
                        "آليات الثواب والعقاب"]].copy()
             st.dataframe(disp, use_container_width=True)
         
-        # 8
         st.markdown("## 8️⃣ الاجتماعات الوزارية")
         fig = px.bar(fq, x="المعهد", y="عدد الاجتماعات الوزارية",
                     title="عدد الاجتماعات الوزارية", color="الربع")
         st.plotly_chart(fig, use_container_width=True)
         
-        # ملخص تنفيذي
         st.divider()
-        st.markdown("## 📋 الملخص التنفيذي لكل معهد")
+        st.markdown("## 📋 الملخص التنفيذي")
         
         for inst in fq["المعهد"].unique():
             i_df = fq[fq["المعهد"] == inst]
             with st.expander(f"🏢 {inst}", expanded=False):
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("📚 مشاريع بحثية",
+                c1.metric("📚 مشاريع",
                           int(i_df["فردي - عدد المشاريع"].sum() +
                               i_df["مشترك - عدد المشاريع"].sum()))
                 c2.metric("📄 تقارير",
                           int(i_df["فردي - عدد التقارير"].sum() +
                               i_df["مشترك - عدد التقارير"].sum()))
-                c3.metric("🔬 أبحاث منشورة", int(i_df["أبحاث منشورة"].sum()))
+                c3.metric("🔬 أبحاث", int(i_df["أبحاث منشورة"].sum()))
                 c4.metric("📋 مقترحات", int(i_df["إجمالي المقترحات"].sum()))
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("🎓 ماجستير", int(i_df["رسائل ماجستير"].sum()))
                 c2.metric("🎓 دكتوراه", int(i_df["رسائل دكتوراه"].sum()))
-                c3.metric("💰 تمويل الخطة (ألف ج)",
+                c3.metric("💰 تمويل (ألف ج)",
                           f"{i_df['تمويل الخطة البحثية - مبلغ'].sum():.1f}")
                 c4.metric("💵 المنصرف (ألف ج)",
                           f"{i_df['المنصرف الفعلي - مبلغ'].sum():.1f}")
         
-        # الجدول الشامل + التحميل
         st.divider()
         st.markdown("## 📄 الجدول الشامل")
         
@@ -1237,7 +1258,7 @@ if tab_q_dashboard is not None:
         
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button("📥 تحميل Excel شامل",
+            st.download_button("📥 تحميل Excel",
                               data=to_excel(fq),
                               file_name=f"quarterly_{datetime.now().strftime('%Y%m%d')}.xlsx",
                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
