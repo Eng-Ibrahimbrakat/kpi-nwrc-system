@@ -50,12 +50,13 @@ h1, h2, h3, h4, h5, h6 { direction: rtl; text-align: right; }
 """, unsafe_allow_html=True)
 
 # ============================================================
-# الاتصال بـ Google Sheets
+# الاتصال بـ Google Sheets - النسخة المُصححة
 # ============================================================
 SPREADSHEET_KEY = "1QSfmNo9U0TNvdwRgLhLBgVNZbiL8wVcoWlffBz6cSfg"
 
 @st.cache_resource(show_spinner=False)
-def get_client():
+def _get_authorized_client():
+    """تخزين مؤقت لكائن العميل المُصرح فقط"""
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive"
@@ -65,35 +66,60 @@ def get_client():
     )
     return gspread.authorize(creds)
 
-@st.cache_resource(show_spinner=False)
 def get_spreadsheet():
-    return get_client().open_by_key(SPREADSHEET_KEY)
+    """فتح الـ Spreadsheet - بدون cache لضمان رؤية الأوراق الجديدة"""
+    return _get_authorized_client().open_by_key(SPREADSHEET_KEY)
 
 def get_worksheet(sheet_name):
-    """بدون Cache - لتفادي مشكلة None المخزنة"""
+    """محاولة الحصول على ورقة مع إعادة المحاولة"""
     try:
         return get_spreadsheet().worksheet(sheet_name)
     except gspread.WorksheetNotFound:
         return None
     except Exception:
-        return None
+        # إعادة محاولة واحدة عند أي خطأ آخر
+        try:
+            time.sleep(1)
+            return get_spreadsheet().worksheet(sheet_name)
+        except Exception:
+            return None
 
 def get_or_create_sheet(sheet_name, headers=None):
+    """الحصول على ورقة أو إنشاؤها بشكل آمن"""
+    # المحاولة الأولى
     ws = get_worksheet(sheet_name)
-    if ws is None:
-        try:
-            ss = get_spreadsheet()
-            ws = ss.add_worksheet(title=sheet_name, rows=1000, cols=30)
-            if headers:
-                ws.append_row(headers)
-            return ws
-        except Exception as e:
-            st.error(f"خطأ في إنشاء الورقة {sheet_name}: {e}")
-            return None
-    return ws
+    if ws is not None:
+        return ws
+    
+    # محاولة ثانية بعد انتظار قصير
+    time.sleep(0.5)
+    ws = get_worksheet(sheet_name)
+    if ws is not None:
+        return ws
+    
+    # محاولة إنشاء الورقة
+    try:
+        ss = get_spreadsheet()
+        ws = ss.add_worksheet(title=sheet_name, rows=1000, cols=30)
+        if headers:
+            ws.append_row(headers)
+        return ws
+    except Exception as e:
+        error_msg = str(e).lower()
+        # إذا كانت الورقة موجودة بالفعل، حاول الحصول عليها
+        if "already exists" in error_msg or "alreadyexist" in error_msg:
+            try:
+                time.sleep(1)
+                return get_spreadsheet().worksheet(sheet_name)
+            except Exception as e2:
+                st.error(f"❌ تعذر الوصول للورقة {sheet_name}: {e2}")
+                return None
+        st.error(f"❌ خطأ في الوصول للورقة {sheet_name}: {e}")
+        return None
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_sheet_data(sheet_name, _cache_bust=0):
+    """قراءة بيانات ورقة مع cache"""
     try:
         ws = get_worksheet(sheet_name)
         if ws is None:
@@ -111,6 +137,7 @@ def fetch_sheet_data(sheet_name, _cache_bust=0):
         return []
 
 def invalidate_cache():
+    """مسح cache البيانات"""
     fetch_sheet_data.clear()
 
 # ============================================================
@@ -131,6 +158,7 @@ def rtl_display(df):
     return df[list(reversed(df.columns))]
 
 def load_sheet_data(sheet_name, columns):
+    """تحميل بيانات ورقة"""
     try:
         get_or_create_sheet(sheet_name, columns)
         all_values = fetch_sheet_data(sheet_name, _cache_bust=st.session_state.get("cache_bust", 0))
@@ -158,7 +186,6 @@ def get_existing_row(df, filters):
     return match.iloc[0]
 
 def get_int(row, col, default=0):
-    """الحصول على قيمة عددية بأمان"""
     if row is None or col not in row.index:
         return default
     try:
@@ -233,7 +260,6 @@ def save_list_data(sheet_name, input_df, base_columns, institute, period_key, pe
         if new_rows:
             ws.append_rows(new_rows)
         
-        # تحديث الـ cache
         st.session_state.cache_bust = st.session_state.get("cache_bust", 0) + 1
         st.session_state.editor_counter = st.session_state.get("editor_counter", 0) + 1
         invalidate_cache()
@@ -276,11 +302,9 @@ def update_or_append_row(sheet_name, new_data, key_cols, all_cols):
         new_row = [str(new_data.get(c, "")) for c in headers]
         
         if found_idx is not None:
-            # تحديث
             ws.update(f"A{found_idx + 2}", [new_row])
             return "updated"
         else:
-            # إضافة
             ws.append_row(new_row)
             return "added"
     except Exception as e:
@@ -422,7 +446,6 @@ if not st.session_state.logged_in:
                 st.session_state.username = username
                 st.session_state.role = USERS[username]["role"]
                 st.session_state.institute = USERS[username]["institute"]
-                # مسح الـ cache عند تسجيل الدخول لعرض بيانات جديدة
                 st.session_state.cache_bust = st.session_state.get("cache_bust", 0) + 1
                 invalidate_cache()
                 st.rerun()
@@ -490,7 +513,7 @@ else:
     tab_lists = None
 
 # ============================================================
-# 📥 إدخال البيانات الشهرية (مع استرجاع البيانات المحفوظة)
+# 📥 إدخال البيانات الشهرية
 # ============================================================
 if tab_input is not None:
     with tab_input:
@@ -505,7 +528,6 @@ if tab_input is not None:
         with c2:
             year = st.number_input("السنة", min_value=2020, max_value=2035, value=2026, key="m_year")
         
-        # ⭐ البحث عن بيانات محفوظة لهذا الشهر
         existing_m = get_existing_row(df_monthly, {
             "المعهد": st.session_state.institute,
             "الشهر": month,
@@ -517,7 +539,6 @@ if tab_input is not None:
         else:
             st.info(f"📝 إدخال بيانات جديدة لشهر **{month} {year}**")
         
-        # استخدام مفاتيح ديناميكية حسب الشهر/السنة
         kp = f"{month}_{year}"
         
         st.divider()
@@ -680,7 +701,6 @@ if tab_input is not None:
                 elif result == "added":
                     st.success("✅ تم حفظ البيانات الشهرية بنجاح")
                 
-                # مسح cache وإعادة التحميل
                 st.session_state.cache_bust = st.session_state.get("cache_bust", 0) + 1
                 invalidate_cache()
                 st.balloons()
@@ -690,13 +710,12 @@ if tab_input is not None:
                 st.error(f"❌ خطأ: {e}")
 
 # ============================================================
-# 📊 إدخال البيانات الربع سنوية (مع استرجاع)
+# 📊 إدخال البيانات الربع سنوية
 # ============================================================
 if tab_q_input is not None:
     with tab_q_input:
         st.header("📊 إدخال البيانات الربع سنوية")
         
-        # تحميل البيانات الربع سنوية
         df_q_existing = load_sheet_data("Quarterly_KPI", QUARTERLY_COLUMNS)
         if not df_q_existing.empty and st.session_state.role != "admin" and "المعهد" in df_q_existing.columns:
             df_q_existing = df_q_existing[df_q_existing["المعهد"] == st.session_state.institute]
@@ -712,7 +731,6 @@ if tab_q_input is not None:
         with c3:
             st.info(f"🏢 {st.session_state.institute}")
         
-        # البحث عن بيانات محفوظة
         existing_q = get_existing_row(df_q_existing, {
             "المعهد": st.session_state.institute,
             "الربع": quarter,
@@ -958,7 +976,7 @@ if tab_q_input is not None:
                 st.error(f"❌ خطأ: {e}")
 
 # ============================================================
-# 📝 إدخال القوائم الشهرية (مع استرجاع البيانات)
+# 📝 إدخال القوائم الشهرية
 # ============================================================
 if tab_lists_input is not None:
     with tab_lists_input:
@@ -992,7 +1010,6 @@ if tab_lists_input is not None:
                 full_cols = base_cols + ["المعهد", "الفترة"]
                 data = load_sheet_data(sheet_name, full_cols)
                 
-                # تصفية حسب المعهد والفترة
                 if not data.empty and "المعهد" in data.columns and "الفترة" in data.columns:
                     data = data[
                         (data["المعهد"] == st.session_state.institute) &
@@ -1006,7 +1023,6 @@ if tab_lists_input is not None:
                     data_clean = data[base_cols].fillna("").reset_index(drop=True)
                     st.success(f"✅ تم استرجاع {len(data_clean)} صف محفوظ")
                 
-                # مفتاح ديناميكي للـ editor
                 editor_key = f"{key_prefix}_ed_{period_val}_{st.session_state.editor_counter}"
                 
                 if not data_clean.empty:
@@ -1022,7 +1038,6 @@ if tab_lists_input is not None:
                     hide_index=True
                 )
                 
-                # إعادة ترتيب الأعمدة للترتيب الأصلي قبل الحفظ
                 if not input_df_rtl.empty:
                     input_df = input_df_rtl[base_cols]
                 else:
