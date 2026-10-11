@@ -28,10 +28,7 @@ if os.path.exists(logo_path):
 # ============================================================
 st.markdown("""
 <style>
-html, body, [class*="css"] {
-    direction: rtl;
-    text-align: right;
-}
+html, body, [class*="css"] { direction: rtl; text-align: right; }
 .stButton > button { width: 100%; }
 [data-testid="stMetricValue"] { font-size: 1.5rem; }
 [data-testid="stDataFrame"] { direction: rtl !important; }
@@ -50,13 +47,14 @@ h1, h2, h3, h4, h5, h6 { direction: rtl; text-align: right; }
 """, unsafe_allow_html=True)
 
 # ============================================================
-# الاتصال بـ Google Sheets - النسخة المُصححة
+# Google Sheets - نظام Cache محسّن
 # ============================================================
 SPREADSHEET_KEY = "1QSfmNo9U0TNvdwRgLhLBgVNZbiL8wVcoWlffBz6cSfg"
 
+# -------- Level 1: Client (cache دائم) --------
 @st.cache_resource(show_spinner=False)
-def _get_authorized_client():
-    """تخزين مؤقت لكائن العميل المُصرح فقط"""
+def _get_client():
+    """تخزين مؤقت لكائن العميل المُصرح - Cache دائم"""
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive"
@@ -66,60 +64,73 @@ def _get_authorized_client():
     )
     return gspread.authorize(creds)
 
-def get_spreadsheet():
-    """فتح الـ Spreadsheet - بدون cache لضمان رؤية الأوراق الجديدة"""
-    return _get_authorized_client().open_by_key(SPREADSHEET_KEY)
+# -------- Level 2: Spreadsheet (cache مع bust) --------
+@st.cache_resource(show_spinner=False)
+def _get_spreadsheet_cached(_bust=0):
+    """Cache Spreadsheet object - يتجدد فقط عند تغيير _bust"""
+    return _get_client().open_by_key(SPREADSHEET_KEY)
 
-def get_worksheet(sheet_name):
-    """محاولة الحصول على ورقة مع إعادة المحاولة"""
+def get_spreadsheet():
+    """الحصول على Spreadsheet من Cache"""
+    bust = st.session_state.get("gs_bust", 0)
+    return _get_spreadsheet_cached(_bust=bust)
+
+# -------- Level 3: Worksheet (cache مع bust) --------
+@st.cache_resource(show_spinner=False)
+def _get_worksheet_cached(sheet_name, _bust=0):
+    """Cache Worksheet object"""
     try:
-        return get_spreadsheet().worksheet(sheet_name)
+        return _get_spreadsheet_cached(_bust=_bust).worksheet(sheet_name)
     except gspread.WorksheetNotFound:
         return None
     except Exception:
-        # إعادة محاولة واحدة عند أي خطأ آخر
-        try:
-            time.sleep(1)
-            return get_spreadsheet().worksheet(sheet_name)
-        except Exception:
-            return None
+        return None
+
+def get_worksheet(sheet_name):
+    """الحصول على worksheet من Cache"""
+    bust = st.session_state.get("gs_bust", 0)
+    return _get_worksheet_cached(sheet_name, _bust=bust)
 
 def get_or_create_sheet(sheet_name, headers=None):
-    """الحصول على ورقة أو إنشاؤها بشكل آمن"""
-    # المحاولة الأولى
+    """الحصول على ورقة موجودة - الإنشاء فقط إذا لم توجد فعلاً"""
     ws = get_worksheet(sheet_name)
     if ws is not None:
         return ws
     
-    # محاولة ثانية بعد انتظار قصير
+    # محاولة ثانية (cache قد يكون قديماً)
     time.sleep(0.5)
-    ws = get_worksheet(sheet_name)
-    if ws is not None:
+    try:
+        ws = get_spreadsheet().worksheet(sheet_name)
         return ws
+    except gspread.WorksheetNotFound:
+        pass
+    except Exception:
+        pass
     
-    # محاولة إنشاء الورقة
+    # محاولة الإنشاء
     try:
         ss = get_spreadsheet()
         ws = ss.add_worksheet(title=sheet_name, rows=1000, cols=30)
         if headers:
             ws.append_row(headers)
+        # تجديد cache لرؤية الورقة الجديدة
+        st.session_state.gs_bust = st.session_state.get("gs_bust", 0) + 1
         return ws
     except Exception as e:
-        error_msg = str(e).lower()
-        # إذا كانت الورقة موجودة بالفعل، حاول الحصول عليها
-        if "already exists" in error_msg or "alreadyexist" in error_msg:
+        err = str(e).lower()
+        if "already exists" in err:
             try:
                 time.sleep(1)
                 return get_spreadsheet().worksheet(sheet_name)
-            except Exception as e2:
-                st.error(f"❌ تعذر الوصول للورقة {sheet_name}: {e2}")
+            except Exception:
                 return None
         st.error(f"❌ خطأ في الوصول للورقة {sheet_name}: {e}")
         return None
 
-@st.cache_data(ttl=30, show_spinner=False)
-def fetch_sheet_data(sheet_name, _cache_bust=0):
-    """قراءة بيانات ورقة مع cache"""
+# -------- Level 4: Data (cache مع TTL و bust) --------
+@st.cache_data(ttl=180, show_spinner=False)
+def _fetch_data_cached(sheet_name, _bust=0):
+    """قراءة بيانات ورقة مع cache لمدة 3 دقائق"""
     try:
         ws = get_worksheet(sheet_name)
         if ws is None:
@@ -136,9 +147,19 @@ def fetch_sheet_data(sheet_name, _cache_bust=0):
     except Exception:
         return []
 
-def invalidate_cache():
-    """مسح cache البيانات"""
-    fetch_sheet_data.clear()
+def fetch_sheet_data(sheet_name):
+    """جلب بيانات ورقة"""
+    bust = st.session_state.get("gs_bust", 0)
+    return _fetch_data_cached(sheet_name, _bust=bust)
+
+def invalidate_all_cache():
+    """مسح جميع أنواع Cache"""
+    st.session_state.gs_bust = st.session_state.get("gs_bust", 0) + 1
+    st.session_state.data_bust = st.session_state.get("data_bust", 0) + 1
+
+def invalidate_data_cache():
+    """مسح cache البيانات فقط (أخف من الكامل)"""
+    st.session_state.data_bust = st.session_state.get("data_bust", 0) + 1
 
 # ============================================================
 # دوال مساعدة
@@ -152,29 +173,40 @@ def fix_encoding(text):
     return text
 
 def rtl_display(df):
-    """عكس ترتيب الأعمدة للعرض RTL"""
     if df.empty:
         return df
     return df[list(reversed(df.columns))]
 
 def load_sheet_data(sheet_name, columns):
-    """تحميل بيانات ورقة"""
-    try:
-        get_or_create_sheet(sheet_name, columns)
-        all_values = fetch_sheet_data(sheet_name, _cache_bust=st.session_state.get("cache_bust", 0))
-        if len(all_values) <= 1:
-            return pd.DataFrame(columns=columns)
+    """تحميل بيانات ورقة - مع cache متعدد المستويات"""
+    # Cache البيانات المحمّلة في session_state
+    cache_key = f"_cached_data_{sheet_name}"
+    bust_key = f"_cache_bust_{sheet_name}"
+    current_bust = st.session_state.get("data_bust", 0)
+    
+    cached_bust = st.session_state.get(bust_key, -1)
+    if cached_bust == current_bust and cache_key in st.session_state:
+        return st.session_state[cache_key].copy()
+    
+    # قراءة البيانات
+    all_values = fetch_sheet_data(sheet_name)
+    
+    if len(all_values) <= 1:
+        df = pd.DataFrame(columns=columns)
+    else:
         headers = [fix_encoding(h) for h in all_values[0]]
         df = pd.DataFrame(all_values[1:], columns=headers)
         for col in df.columns:
             if df[col].dtype == 'object' and col not in columns:
                 df[col] = df[col].apply(fix_encoding)
-        return df
-    except Exception:
-        return pd.DataFrame(columns=columns)
+    
+    # تخزين في session_state
+    st.session_state[cache_key] = df.copy()
+    st.session_state[bust_key] = current_bust
+    
+    return df
 
 def get_existing_row(df, filters):
-    """البحث عن صف مطابق"""
     if df.empty:
         return None
     match = df.copy()
@@ -224,7 +256,7 @@ def safe_sum(df, column):
     return int(pd.to_numeric(df[column], errors='coerce').fillna(0).sum())
 
 def save_list_data(sheet_name, input_df, base_columns, institute, period_key, period_val):
-    """حفظ قائمة نصية - يحل محل البيانات القديمة"""
+    """حفظ قائمة نصية"""
     try:
         full_cols = base_columns + ["المعهد", period_key]
         ws = get_or_create_sheet(sheet_name, full_cols)
@@ -260,9 +292,7 @@ def save_list_data(sheet_name, input_df, base_columns, institute, period_key, pe
         if new_rows:
             ws.append_rows(new_rows)
         
-        st.session_state.cache_bust = st.session_state.get("cache_bust", 0) + 1
-        st.session_state.editor_counter = st.session_state.get("editor_counter", 0) + 1
-        invalidate_cache()
+        invalidate_all_cache()
         st.success(f"✅ تم حفظ البيانات في {sheet_name}")
         st.balloons()
         time.sleep(0.5)
@@ -271,9 +301,12 @@ def save_list_data(sheet_name, input_df, base_columns, institute, period_key, pe
         st.error(f"❌ خطأ في الحفظ: {e}")
 
 def update_or_append_row(sheet_name, new_data, key_cols, all_cols):
-    """تحديث صف موجود أو إضافة صف جديد"""
+    """تحديث صف أو إضافة جديد"""
     try:
         ws = get_or_create_sheet(sheet_name, all_cols)
+        if ws is None:
+            return None
+        
         all_values = ws.get_all_values()
         
         if len(all_values) <= 1:
@@ -283,7 +316,6 @@ def update_or_append_row(sheet_name, new_data, key_cols, all_cols):
         headers = all_values[0]
         data = all_values[1:]
         
-        # البحث عن صف مطابق
         found_idx = None
         for idx, row in enumerate(data):
             match = True
@@ -426,8 +458,10 @@ USERS = {
 # ============================================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-if "cache_bust" not in st.session_state:
-    st.session_state.cache_bust = 0
+if "gs_bust" not in st.session_state:
+    st.session_state.gs_bust = 0
+if "data_bust" not in st.session_state:
+    st.session_state.data_bust = 0
 if "editor_counter" not in st.session_state:
     st.session_state.editor_counter = 0
 
@@ -446,8 +480,7 @@ if not st.session_state.logged_in:
                 st.session_state.username = username
                 st.session_state.role = USERS[username]["role"]
                 st.session_state.institute = USERS[username]["institute"]
-                st.session_state.cache_bust = st.session_state.get("cache_bust", 0) + 1
-                invalidate_cache()
+                invalidate_all_cache()
                 st.rerun()
             else:
                 st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
@@ -461,17 +494,16 @@ with c_header[0]:
     st.success(f"👤 مرحباً **{st.session_state.username}** — 🏢 {st.session_state.institute}")
 with c_header[1]:
     if st.button("🔄 تحديث"):
-        st.session_state.cache_bust = st.session_state.get("cache_bust", 0) + 1
-        st.session_state.editor_counter = st.session_state.get("editor_counter", 0) + 1
-        invalidate_cache()
+        invalidate_all_cache()
         st.rerun()
 with c_header[2]:
     if st.button("🚪 خروج"):
         st.session_state.clear()
-        invalidate_cache()
+        st.cache_data.clear()
+        st.cache_resource.clear()
         st.rerun()
 
-# تحميل البيانات الشهرية
+# تحميل البيانات الشهرية مرة واحدة
 df_monthly = load_sheet_data("KPI_Data", MONTHLY_COLUMNS)
 if not df_monthly.empty and st.session_state.role != "admin" and "المعهد" in df_monthly.columns:
     df_monthly = df_monthly[df_monthly["المعهد"] == st.session_state.institute]
@@ -701,8 +733,7 @@ if tab_input is not None:
                 elif result == "added":
                     st.success("✅ تم حفظ البيانات الشهرية بنجاح")
                 
-                st.session_state.cache_bust = st.session_state.get("cache_bust", 0) + 1
-                invalidate_cache()
+                invalidate_all_cache()
                 st.balloons()
                 time.sleep(0.5)
                 st.rerun()
@@ -967,8 +998,7 @@ if tab_q_input is not None:
                 elif result == "added":
                     st.success("✅ تم حفظ البيانات الربع سنوية")
                 
-                st.session_state.cache_bust = st.session_state.get("cache_bust", 0) + 1
-                invalidate_cache()
+                invalidate_all_cache()
                 st.balloons()
                 time.sleep(0.5)
                 st.rerun()
@@ -1018,7 +1048,7 @@ if tab_lists_input is not None:
                 
                 if data.empty:
                     data_clean = pd.DataFrame(columns=base_cols)
-                    st.info("📝 لا توجد بيانات محفوظة لهذه الفترة - يمكنك البدء بالإضافة")
+                    st.info("📝 لا توجد بيانات محفوظة لهذه الفترة")
                 else:
                     data_clean = data[base_cols].fillna("").reset_index(drop=True)
                     st.success(f"✅ تم استرجاع {len(data_clean)} صف محفوظ")
@@ -1156,41 +1186,42 @@ if 'tab_m_dashboard' in dir() and tab_m_dashboard is not None:
         
         if not df_monthly.empty:
             text_cols = ["المعهد", "المستخدم", "الشهر", "السنة"]
-            for col in df_monthly.columns:
+            df_m_disp = df_monthly.copy()
+            for col in df_m_disp.columns:
                 if col not in text_cols:
-                    df_monthly[col] = pd.to_numeric(df_monthly[col], errors="coerce").fillna(0)
+                    df_m_disp[col] = pd.to_numeric(df_m_disp[col], errors="coerce").fillna(0)
             
             st.subheader("🎯 مؤشرات رئيسية")
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("📚 الدراسات", safe_sum(df_monthly, "إجمالي الدراسات الجارية"))
-            c2.metric("📄 التقارير", safe_sum(df_monthly, "إجمالي التقارير"))
-            c3.metric("📋 المقترحات", safe_sum(df_monthly, "إجمالي المقترحات"))
-            c4.metric("🤝 الاجتماعات", safe_sum(df_monthly, "إجمالي الاجتماعات"))
-            c5.metric("👨‍🎓 المتدربين", safe_sum(df_monthly, "متدربين"))
+            c1.metric("📚 الدراسات", safe_sum(df_m_disp, "إجمالي الدراسات الجارية"))
+            c2.metric("📄 التقارير", safe_sum(df_m_disp, "إجمالي التقارير"))
+            c3.metric("📋 المقترحات", safe_sum(df_m_disp, "إجمالي المقترحات"))
+            c4.metric("🤝 الاجتماعات", safe_sum(df_m_disp, "إجمالي الاجتماعات"))
+            c5.metric("👨‍🎓 المتدربين", safe_sum(df_m_disp, "متدربين"))
             
             st.divider()
             
             st.subheader("📊 مؤشرات تفصيلية")
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("🏃 المأموريات", safe_sum(df_monthly, "إجمالي عدد المأموريات"))
-            c2.metric("🔍 المعاينات", safe_sum(df_monthly, "إجمالي عدد المعاينات"))
-            c3.metric("📝 الأوراق", safe_sum(df_monthly, "إجمالي الأوراق البحثية"))
-            c4.metric("🎓 الرسائل", safe_sum(df_monthly, "إجمالي الرسائل"))
-            c5.metric("👥 العاملون", safe_sum(df_monthly, "إجمالي عدد العاملين الفعلي"))
+            c1.metric("🏃 المأموريات", safe_sum(df_m_disp, "إجمالي عدد المأموريات"))
+            c2.metric("🔍 المعاينات", safe_sum(df_m_disp, "إجمالي عدد المعاينات"))
+            c3.metric("📝 الأوراق", safe_sum(df_m_disp, "إجمالي الأوراق البحثية"))
+            c4.metric("🎓 الرسائل", safe_sum(df_m_disp, "إجمالي الرسائل"))
+            c5.metric("👥 العاملون", safe_sum(df_m_disp, "إجمالي عدد العاملين الفعلي"))
             
             st.divider()
             
-            if "المعهد" in df_monthly.columns:
+            if "المعهد" in df_m_disp.columns:
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown("#### 📚 الدراسات الجارية")
-                    fig = px.bar(df_monthly, x="المعهد",
+                    fig = px.bar(df_m_disp, x="المعهد",
                                 y=["دراسات خطة بحثية جارية", "دراسات استشارية جارية", "دراسات بتمويل ذاتي جارية"],
                                 barmode="group")
                     st.plotly_chart(fig, use_container_width=True)
                 with c2:
                     st.markdown("#### 📄 التقارير")
-                    fig = px.bar(df_monthly, x="المعهد",
+                    fig = px.bar(df_m_disp, x="المعهد",
                                 y=["تقرير مرحلي", "تقرير نهائي", "تقرير معاينة", "تقرير معايرة", "تقرير أخرى"],
                                 barmode="stack")
                     st.plotly_chart(fig, use_container_width=True)
@@ -1198,11 +1229,11 @@ if 'tab_m_dashboard' in dir() and tab_m_dashboard is not None:
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown("#### 👥 التدريب")
-                    fig = px.bar(df_monthly, x="المعهد", y=["متدربين", "مدربين"], barmode="group")
+                    fig = px.bar(df_m_disp, x="المعهد", y=["متدربين", "مدربين"], barmode="group")
                     st.plotly_chart(fig, use_container_width=True)
                 with c2:
                     st.markdown("#### 🤝 الاجتماعات")
-                    fig = px.bar(df_monthly, x="المعهد",
+                    fig = px.bar(df_m_disp, x="المعهد",
                                 y=["اجتماعات بالوزارة", "اجتماعات بالمركز", "اجتماعات جهات خارجية",
                                    "اجتماعات مع العاملين", "اجتماعات جهات أخرى"],
                                 barmode="stack")
@@ -1217,15 +1248,10 @@ if tab_q_dashboard is not None:
     with tab_q_dashboard:
         st.title("📊 التقارير الربع سنوية")
         
-        try:
-            all_values = fetch_sheet_data("Quarterly_KPI", _cache_bust=st.session_state.get("cache_bust", 0))
-            if len(all_values) <= 1:
-                st.info("📭 لا توجد بيانات ربع سنوية")
-                st.stop()
-            headers = [fix_encoding(h) for h in all_values[0]]
-            df_q = pd.DataFrame(all_values[1:], columns=headers)
-        except Exception as e:
-            st.error(f"خطأ: {e}")
+        df_q = load_sheet_data("Quarterly_KPI", QUARTERLY_COLUMNS)
+        
+        if df_q.empty:
+            st.info("📭 لا توجد بيانات ربع سنوية")
             st.stop()
         
         q_text_cols = ["المعهد", "المستخدم", "الربع", "السنة المالية",
