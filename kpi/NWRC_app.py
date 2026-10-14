@@ -207,76 +207,88 @@ def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val
         return False
 
 # ============================================================
-# ⭐ دالة حفظ/تحديث KPI - النسخة المُصححة
+# ⭐ دالة حفظ/تحديث KPI - النسخة النهائية المُصححة
 # ============================================================
 def save_or_update_row(sheet_name, all_cols, data_dict, key_cols):
-    """حفظ أو تحديث صف بطريقة آمنة"""
+    """
+    حفظ أو تحديث صف بأمان.
+    يعتمد على clear() + append_rows() بدلاً من update() لتجنب مشاكل النطاقات.
+    """
     try:
         ws = get_or_create_sheet(sheet_name, all_cols)
         if ws is None:
             st.error(f"فشل الوصول للورقة {sheet_name}")
             return None
         
+        # قراءة كل البيانات الحالية
         all_v = ws.get_all_values()
         
-        # إذا كانت الورقة فارغة
+        # تجهيز البيانات الجديدة
         if len(all_v) == 0:
-            ws.append_row(all_cols)
-            all_v = [all_cols]
-        
-        headers = all_v[0]
-        
-        # إذا كان فقط صف العناوين
-        if len(all_v) == 1:
-            new_row = [str(data_dict.get(c, "0")) for c in headers]
-            ws.append_row(new_row)
-            return "added"
-        
-        # البحث عن صف مطابق
-        found_idx = None
-        for i, r in enumerate(all_v[1:]):
-            match = True
-            for k in key_cols:
-                if k not in headers:
-                    match = False
-                    break
-                col_idx = headers.index(k)
-                row_val = str(r[col_idx]) if col_idx < len(r) else ""
-                if row_val != str(data_dict.get(k, "")):
-                    match = False
-                    break
-            if match:
-                found_idx = i
-                break
-        
-        new_row = [str(data_dict.get(c, "0")) for c in headers]
-        n_cols = len(headers)
-        end_col = col_letter(n_cols)
-        
-        if found_idx is not None:
-            # تحديث صف موجود
-            row_num = found_idx + 2
-            range_str = f"A{row_num}:{end_col}{row_num}"
-            try:
-                ws.update(range_name=range_str, values=[new_row])
-                return "updated"
-            except Exception as e1:
-                # بديل: حذف الصف وإعادة الإضافة
-                try:
-                    ws.delete_rows(row_num)
-                    ws.append_row(new_row)
-                    return "updated"
-                except Exception as e2:
-                    st.error(f"فشل التحديث: {e1} | {e2}")
-                    return None
+            # ورقة فارغة تماماً → إنشاء العناوين + الصف الأول
+            new_data = [
+                list(all_cols),
+                [str(data_dict.get(c, "0")) for c in all_cols]
+            ]
+            result = "added"
         else:
-            # إضافة صف جديد
-            ws.append_row(new_row)
-            return "added"
+            # الورقة فيها عناوين
+            headers = all_v[0]
+            
+            # ملء العناوين لو ناقصة
+            for c in all_cols:
+                if c not in headers:
+                    headers.append(c)
+            
+            # بناء البيانات الجديدة
+            new_data = [headers]
+            found = False
+            expected_len = len(headers)
+            
+            for row in all_v[1:]:
+                # توحيد طول الصف
+                row_list = list(row) + [""] * (expected_len - len(row))
+                row_list = row_list[:expected_len]
+                
+                # هل هذا هو الصف المطلوب تحديثه؟
+                is_match = True
+                for k in key_cols:
+                    if k in headers:
+                        idx = headers.index(k)
+                        if str(row_list[idx]) != str(data_dict.get(k, "")):
+                            is_match = False
+                            break
+                    else:
+                        is_match = False
+                        break
+                
+                if is_match:
+                    # تحديث الصف
+                    new_row = [str(data_dict.get(h, "0")) for h in headers]
+                    new_data.append(new_row)
+                    found = True
+                else:
+                    new_data.append(row_list)
+            
+            if not found:
+                # إضافة صف جديد
+                new_row = [str(data_dict.get(h, "0")) for h in headers]
+                new_data.append(new_row)
+                result = "added"
+            else:
+                result = "updated"
+        
+        # ⭐ حذف كل شيء وإعادة الكتابة
+        # هذا يتجنب مشاكل ws.update() تماماً
+        ws.clear()
+        ws.append_rows(new_data, value_input_option="USER_ENTERED")
+        
+        return result
     except Exception as e:
         st.error(f"خطأ في الحفظ: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return None
-
 # ============================================================
 # ثوابت
 # ============================================================
