@@ -634,16 +634,164 @@ if tab_input is not None:
 # ============================================================
 # 📝 القوائم الشهرية - مربوطة بعدد المدخلات
 # ============================================================
+# ============================================================
+# 📝 القوائم الشهرية - مربوطة بعدد المدخلات
+# ============================================================
 if tab_lists is not None:
     with tab_lists:
         st.header("📝 القوائم التفصيلية الشهرية")
         st.caption("يتم توليد عدد الصفوف تلقائياً بناءً على الأعداد المدخلة")
         
+        # ========= تحديد الأشهر المتاحة =========
+        if not df_monthly.empty and "الشهر" in df_monthly.columns:
+            # الأشهر التي بها بيانات فعلية للمعهد الحالي
+            df_inst = df_monthly
+            if "المعهد" in df_inst.columns:
+                df_inst = df_inst[df_inst["المعهد"] == st.session_state.institute]
+            
+            available_months = []
+            available_years = []
+            if not df_inst.empty:
+                available_months = sorted(
+                    df_inst["الشهر"].unique().tolist(),
+                    key=lambda m: ALL_MONTHS.index(m) if m in ALL_MONTHS else 99
+                )
+                try:
+                    available_years = sorted(set(
+                        int(float(y)) for y in df_inst["السنة"].unique() if str(y).strip()
+                    ))
+                except Exception:
+                    available_years = [2026]
+        else:
+            available_months = []
+            available_years = []
+        
+        # عرض الأشهر المتاحة
+        if available_months:
+            st.success(f"📅 الأشهر المتاح بها بيانات: {' • '.join(available_months)}")
+        else:
+            st.warning("⚠️ لا توجد بيانات محفوظة بعد. يرجى إدخال البيانات أولاً من تبويب الإدخال الشهري.")
+        
         c1, c2 = st.columns(2)
         with c1:
-            ml_month = st.selectbox("الشهر", ALL_MONTHS, key="ml_m")
+            if available_months:
+                # الافتراضي: آخر شهر به بيانات
+                default_month = available_months[-1]
+                ml_month = st.selectbox(
+                    "الشهر",
+                    ALL_MONTHS,
+                    index=ALL_MONTHS.index(default_month),
+                    key="ml_m"
+                )
+            else:
+                ml_month = st.selectbox("الشهر", ALL_MONTHS, key="ml_m")
+        
         with c2:
-            ml_year = st.number_input("السنة", min_value=2020, max_value=2035, value=2026, key="ml_y")
+            default_year = available_years[-1] if available_years else 2026
+            ml_year = st.number_input(
+                "السنة",
+                min_value=2020,
+                max_value=2035,
+                value=default_year,
+                key="ml_y"
+            )
+        
+        period_val = f"{ml_month} {ml_year}"
+        
+        # ========= إعادة البحث عن البيانات =========
+        month_data = get_existing(df_monthly, {
+            "المعهد": st.session_state.institute,
+            "الشهر": ml_month,
+            "السنة": str(int(ml_year))
+        })
+        
+        # البحث في حالة عدم التطابق (بسبب .0 أو مسافات)
+        if month_data is None and not df_monthly.empty:
+            try:
+                mask = (
+                    (df_monthly["المعهد"].astype(str).str.strip() == st.session_state.institute.strip()) &
+                    (df_monthly["الشهر"].astype(str).str.strip() == ml_month.strip()) &
+                    (df_monthly["السنة"].astype(str).str.replace(".0", "", regex=False).str.strip() 
+                     == str(int(ml_year)))
+                )
+                if mask.any():
+                    month_data = df_monthly[mask].iloc[0]
+            except Exception:
+                pass
+        
+        if month_data is None:
+            st.error(
+                f"⚠️ لم يتم إدخال البيانات الرقمية لشهر **{ml_month} {ml_year}** بعد.\n\n"
+                f"👉 يرجى الذهاب إلى تبويب **📥 الإدخال الشهري**، واختيار نفس الشهر، ثم إدخال البيانات والحفظ."
+            )
+            if available_months:
+                st.info(f"💡 الأشهر التي بها بيانات: {' • '.join(available_months)}")
+            st.stop()
+        
+        st.success(f"📌 {st.session_state.institute} — {period_val}")
+        st.divider()
+        
+        # باقي الكود كما هو (قائمة التبويبات الفرعية)
+        list_tabs = st.tabs([v[0].replace("_", " ") for v in NUMERIC_TO_LIST.values()])
+        
+        for idx, (numeric_col, (sheet_name, cols)) in enumerate(NUMERIC_TO_LIST.items()):
+            with list_tabs[idx]:
+                required_count = get_int(month_data, numeric_col)
+                
+                st.markdown(f"### 📝 {sheet_name.replace('_', ' ')}")
+                
+                if required_count == 0:
+                    st.info(f"ℹ️ لم يتم إدخال أي عدد لـ **{numeric_col}** - لا توجد صفوف مطلوبة")
+                    continue
+                
+                st.info(f"📊 **العدد المُدخل:** {required_count} - سيتم عرض {required_count} صف مع مسلسل تلقائي")
+                st.divider()
+                
+                full = cols + ["المعهد", "الفترة"]
+                existing_data = load_data(sheet_name, full)
+                
+                if not existing_data.empty and "المعهد" in existing_data.columns and "الفترة" in existing_data.columns:
+                    existing_data = existing_data[
+                        (existing_data["المعهد"] == st.session_state.institute) &
+                        (existing_data["الفترة"] == period_val)
+                    ]
+                    existing_data = existing_data[cols].fillna("").reset_index(drop=True)
+                else:
+                    existing_data = pd.DataFrame(columns=cols)
+                
+                required_df = pd.DataFrame(index=range(required_count), columns=cols).fillna("")
+                for i in range(required_count):
+                    required_df.at[i, "م"] = str(i + 1)
+                
+                if not existing_data.empty:
+                    for _, r in existing_data.iterrows():
+                        try:
+                            m_val = int(float(r["م"]))
+                            if 1 <= m_val <= required_count:
+                                for col in cols:
+                                    if col in r.index and r[col] != "":
+                                        required_df.at[m_val - 1, col] = r[col]
+                        except (ValueError, TypeError):
+                            continue
+                
+                editor_key = f"{sheet_name}_ed_{period_val}_{st.session_state.editor_counter}"
+                
+                input_df_rtl = st.data_editor(
+                    rtl_display(required_df),
+                    num_rows="fixed",
+                    use_container_width=True,
+                    key=editor_key,
+                    hide_index=True,
+                    disabled=["م"],
+                )
+                
+                if not input_df_rtl.empty:
+                    input_df = input_df_rtl[cols]
+                else:
+                    input_df = input_df_rtl
+                
+                if st.button(f"💾 حفظ {sheet_name.replace('_', ' ')}", key=f"{sheet_name}_sv_{period_val}"):
+                    save_list(sheet_name, input_df, cols, st.session_state.institute, period_val)
         
         period_val = f"{ml_month} {ml_year}"
         
