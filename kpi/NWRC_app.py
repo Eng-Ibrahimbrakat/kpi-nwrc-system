@@ -634,9 +634,6 @@ if tab_input is not None:
 # ============================================================
 # 📝 القوائم الشهرية - مربوطة بعدد المدخلات
 # ============================================================
-# ============================================================
-# 📝 القوائم الشهرية - مربوطة بعدد المدخلات
-# ============================================================
 if tab_lists is not None:
     with tab_lists:
         st.header("📝 القوائم التفصيلية الشهرية")
@@ -792,90 +789,6 @@ if tab_lists is not None:
                 
                 if st.button(f"💾 حفظ {sheet_name.replace('_', ' ')}", key=f"{sheet_name}_sv_{period_val}"):
                     save_list(sheet_name, input_df, cols, st.session_state.institute, period_val)
-        
-        period_val = f"{ml_month} {ml_year}"
-        
-        # البحث عن بيانات الشهر
-        month_data = get_existing(df_monthly, {
-            "المعهد": st.session_state.institute,
-            "الشهر": ml_month, "السنة": str(int(ml_year))
-        })
-        
-        if month_data is None:
-            st.warning("⚠️ لم يتم إدخال البيانات الرقمية لهذا الشهر بعد. يرجى إدخالها أولاً من تبويب الإدخال الشهري.")
-            st.stop()
-        
-        st.success(f"📌 {st.session_state.institute} — {period_val}")
-        st.divider()
-        
-        # قائمة التبويبات الفرعية
-        list_tabs = st.tabs([v[0].replace("_", " ") for v in NUMERIC_TO_LIST.values()])
-        
-        for idx, (numeric_col, (sheet_name, cols)) in enumerate(NUMERIC_TO_LIST.items()):
-            with list_tabs[idx]:
-                # عدد الصفوف المطلوبة من المدخل الرقمي
-                required_count = get_int(month_data, numeric_col)
-                
-                st.markdown(f"### 📝 {sheet_name.replace('_', ' ')}")
-                
-                if required_count == 0:
-                    st.info(f"ℹ️ لم يتم إدخال أي عدد لـ **{numeric_col}** - لا توجد صفوف مطلوبة")
-                    continue
-                
-                st.info(f"📊 **العدد المُدخل:** {required_count} - سيتم عرض {required_count} صف مع مسلسل تلقائي")
-                st.divider()
-                
-                # تحميل البيانات المحفوظة
-                full = cols + ["المعهد", "الفترة"]
-                existing_data = load_data(sheet_name, full)
-                
-                if not existing_data.empty and "المعهد" in existing_data.columns and "الفترة" in existing_data.columns:
-                    existing_data = existing_data[
-                        (existing_data["المعهد"] == st.session_state.institute) &
-                        (existing_data["الفترة"] == period_val)
-                    ]
-                    existing_data = existing_data[cols].fillna("").reset_index(drop=True)
-                else:
-                    existing_data = pd.DataFrame(columns=cols)
-                
-                # تجهيز الإطار بالعدد المطلوب
-                required_df = pd.DataFrame(index=range(required_count), columns=cols).fillna("")
-                # المسلسل تلقائي
-                for i in range(required_count):
-                    required_df.at[i, "م"] = str(i + 1)
-                
-                # دمج البيانات المحفوظة (استبدال حسب المسلسل)
-                if not existing_data.empty:
-                    for _, r in existing_data.iterrows():
-                        try:
-                            m_val = int(float(r["م"]))
-                            if 1 <= m_val <= required_count:
-                                for col in cols:
-                                    if col in r.index and r[col] != "":
-                                        required_df.at[m_val - 1, col] = r[col]
-                        except (ValueError, TypeError):
-                            continue
-                
-                editor_key = f"{sheet_name}_ed_{period_val}_{st.session_state.editor_counter}"
-                
-                input_df_rtl = st.data_editor(
-                    rtl_display(required_df),
-                    num_rows="fixed",
-                    use_container_width=True,
-                    key=editor_key,
-                    hide_index=True,
-                    disabled=["م"],
-                )
-                
-                # إعادة ترتيب الأعمدة
-                if not input_df_rtl.empty:
-                    input_df = input_df_rtl[cols]
-                else:
-                    input_df = input_df_rtl
-                
-                if st.button(f"💾 حفظ {sheet_name.replace('_', ' ')}", key=f"{sheet_name}_sv_{period_val}"):
-                    save_list(sheet_name, input_df, cols, st.session_state.institute, period_val)
-
 # ============================================================
 # 📊 التقارير الربع سنوية - تجميع تلقائي
 # ============================================================
