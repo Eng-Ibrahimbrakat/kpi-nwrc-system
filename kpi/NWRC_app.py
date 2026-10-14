@@ -39,9 +39,17 @@ h1, h2, h3, h4, h5, h6 { direction: rtl; text-align: right; }
 """, unsafe_allow_html=True)
 
 # ============================================================
-# Google Sheets
+# دوال Google Sheets
 # ============================================================
 SPREADSHEET_KEY = "1QSfmNo9U0TNvdwRgLhLBgVNZbiL8wVcoWlffBz6cSfg"
+
+def col_letter(n):
+    """تحويل رقم العمود (1-based) إلى حرف (A, B, ..., Z, AA, AB, ...)"""
+    result = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        result = chr(65 + r) + result
+    return result
 
 @st.cache_resource(show_spinner=False)
 def _get_client():
@@ -77,7 +85,7 @@ def get_or_create_sheet(sheet_name, headers=None):
     except Exception:
         pass
     try:
-        ws = get_spreadsheet().add_worksheet(title=sheet_name, rows=2000, cols=30)
+        ws = get_spreadsheet().add_worksheet(title=sheet_name, rows=2000, cols=40)
         if headers:
             ws.append_row(headers)
         st.session_state.gs_bust = st.session_state.get("gs_bust", 0) + 1
@@ -92,7 +100,7 @@ def get_or_create_sheet(sheet_name, headers=None):
         st.error(f"خطأ في الوصول للورقة {sheet_name}: {e}")
         return None
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def _fetch_cached(sheet_name, _bust=0):
     try:
         ws = get_worksheet(sheet_name)
@@ -132,10 +140,9 @@ def rtl_display(df):
     return df[list(reversed(df.columns))]
 
 # ============================================================
-# load_sheet - النسخة المُصححة (حل KeyError)
+# load_sheet
 # ============================================================
 def load_sheet(sheet_name, columns):
-    """تحميل بيانات ورقة مع ضمان وجود كل الأعمدة المطلوبة"""
     cache_key = f"_cd_{sheet_name}"
     bust_key = f"_cb_{sheet_name}"
     cur_bust = st.session_state.get("data_bust", 0)
@@ -149,7 +156,6 @@ def load_sheet(sheet_name, columns):
         df = pd.DataFrame(columns=columns)
     else:
         headers = [fix_encoding(h) for h in all_values[0]]
-        # توحيد عدد الأعمدة (في حال بعض الصفوف أقصر من العناوين)
         max_len = len(headers)
         normalized = []
         for row in all_values[1:]:
@@ -160,7 +166,6 @@ def load_sheet(sheet_name, columns):
             if df[col].dtype == 'object' and col not in columns:
                 df[col] = df[col].apply(fix_encoding)
     
-    # ⭐ ضمان وجود كل الأعمدة المطلوبة (حل KeyError)
     for col in columns:
         if col not in df.columns:
             df[col] = ""
@@ -202,7 +207,78 @@ def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val
         return False
 
 # ============================================================
-# ثوابت موحدة
+# ⭐ دالة حفظ/تحديث KPI - النسخة المُصححة
+# ============================================================
+def save_or_update_row(sheet_name, all_cols, data_dict, key_cols):
+    """حفظ أو تحديث صف بطريقة آمنة"""
+    try:
+        ws = get_or_create_sheet(sheet_name, all_cols)
+        if ws is None:
+            st.error(f"فشل الوصول للورقة {sheet_name}")
+            return None
+        
+        all_v = ws.get_all_values()
+        
+        # إذا كانت الورقة فارغة
+        if len(all_v) == 0:
+            ws.append_row(all_cols)
+            all_v = [all_cols]
+        
+        headers = all_v[0]
+        
+        # إذا كان فقط صف العناوين
+        if len(all_v) == 1:
+            new_row = [str(data_dict.get(c, "0")) for c in headers]
+            ws.append_row(new_row)
+            return "added"
+        
+        # البحث عن صف مطابق
+        found_idx = None
+        for i, r in enumerate(all_v[1:]):
+            match = True
+            for k in key_cols:
+                if k not in headers:
+                    match = False
+                    break
+                col_idx = headers.index(k)
+                row_val = str(r[col_idx]) if col_idx < len(r) else ""
+                if row_val != str(data_dict.get(k, "")):
+                    match = False
+                    break
+            if match:
+                found_idx = i
+                break
+        
+        new_row = [str(data_dict.get(c, "0")) for c in headers]
+        n_cols = len(headers)
+        end_col = col_letter(n_cols)
+        
+        if found_idx is not None:
+            # تحديث صف موجود
+            row_num = found_idx + 2
+            range_str = f"A{row_num}:{end_col}{row_num}"
+            try:
+                ws.update(range_name=range_str, values=[new_row])
+                return "updated"
+            except Exception as e1:
+                # بديل: حذف الصف وإعادة الإضافة
+                try:
+                    ws.delete_rows(row_num)
+                    ws.append_row(new_row)
+                    return "updated"
+                except Exception as e2:
+                    st.error(f"فشل التحديث: {e1} | {e2}")
+                    return None
+        else:
+            # إضافة صف جديد
+            ws.append_row(new_row)
+            return "added"
+    except Exception as e:
+        st.error(f"خطأ في الحفظ: {e}")
+        return None
+
+# ============================================================
+# ثوابت
 # ============================================================
 MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
           "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
@@ -304,55 +380,40 @@ MONTHLY_LISTS = {
 }
 
 # ============================================================
-# ⭐ منطق الفترة المالية - النسخة المُصححة
-# السنة المالية تبدأ من يوليو
-# أكتوبر → Q1 (يوليو، أغسطس، سبتمبر)
-# يناير  → Q2 (أكتوبر، نوفمبر، ديسمبر)
-# أبريل  → Q3 (يناير، فبراير، مارس)
-# يوليو  → Q4 (أبريل، مايو، يونيو)
+# منطق الفترة المالية
 # ============================================================
 def get_fiscal_period(month, year):
     result = {
-        "fiscal_year": "",
-        "quarter": None,
-        "half": None,
-        "months_for_quarter": [],
-        "months_for_half": [],
+        "fiscal_year": "", "quarter": None, "half": None,
+        "months_for_quarter": [], "months_for_half": [],
         "is_quarter_month": month in ["أكتوبر", "يناير", "أبريل", "يوليو"],
         "is_half_month": month in ["يناير", "يوليو"],
         "is_annual_month": month == "يوليو",
     }
     
-    # تحديد السنة المالية الحالية
-    month_idx = MONTHS.index(month) + 1  # 1-12
-    if month_idx >= 7:  # يوليو إلى ديسمبر → السنة المالية (year)/(year+1)
-        current_fy = f"{year}/{year + 1}"
-    else:  # يناير إلى يونيو → السنة المالية (year-1)/(year)
-        current_fy = f"{year - 1}/{year}"
-    result["fiscal_year"] = current_fy
-    
-    # تحديد الربع عند الشهور المحددة
     if month == "أكتوبر":
         result["quarter"] = "الربع الأول"
         result["months_for_quarter"] = [("يوليو", year), ("أغسطس", year), ("سبتمبر", year)]
         result["fiscal_year"] = f"{year}/{year + 1}"
-    
     elif month == "يناير":
         result["quarter"] = "الربع الثاني"
         result["months_for_quarter"] = [("أكتوبر", year - 1), ("نوفمبر", year - 1), ("ديسمبر", year - 1)]
         result["fiscal_year"] = f"{year - 1}/{year}"
-    
     elif month == "أبريل":
         result["quarter"] = "الربع الثالث"
         result["months_for_quarter"] = [("يناير", year), ("فبراير", year), ("مارس", year)]
         result["fiscal_year"] = f"{year - 1}/{year}"
-    
     elif month == "يوليو":
         result["quarter"] = "الربع الرابع"
         result["months_for_quarter"] = [("أبريل", year), ("مايو", year), ("يونيو", year)]
         result["fiscal_year"] = f"{year - 1}/{year}"
+    else:
+        month_idx = MONTHS.index(month) + 1
+        if month_idx >= 7:
+            result["fiscal_year"] = f"{year}/{year + 1}"
+        else:
+            result["fiscal_year"] = f"{year - 1}/{year}"
     
-    # النصف سنوي: يناير (النصف الأول: يوليو-ديسمبر) / يوليو (النصف الثاني: يناير-يونيو)
     if month == "يناير":
         result["half"] = "النصف الأول"
         result["months_for_half"] = [
@@ -369,7 +430,7 @@ def get_fiscal_period(month, year):
     return result
 
 # ============================================================
-# حساب KPI من القوائم
+# حساب KPI
 # ============================================================
 def compute_kpi_from_lists(institute, month, year):
     period = f"{month} {year}"
@@ -471,14 +532,9 @@ USERS = {
 # ============================================================
 # Session State
 # ============================================================
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "gs_bust" not in st.session_state:
-    st.session_state.gs_bust = 0
-if "data_bust" not in st.session_state:
-    st.session_state.data_bust = 0
-if "editor_counter" not in st.session_state:
-    st.session_state.editor_counter = 0
+for k, v in [("logged_in", False), ("gs_bust", 0), ("data_bust", 0), ("editor_counter", 0)]:
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # ============================================================
 # تسجيل الدخول
@@ -522,10 +578,11 @@ with c_head[2]:
 # Tabs
 # ============================================================
 if st.session_state.role == "admin":
-    tab_dash, tab_q_dash, tab_data = st.tabs([
+    tab_dash, tab_q_dash, tab_data, tab_debug = st.tabs([
         "📊 Dashboard الشهري",
         "📈 التقرير الربع سنوي",
-        "📄 البيانات"
+        "📄 البيانات",
+        "🔧 تشخيص"
     ])
     tab_input = None
 else:
@@ -535,6 +592,7 @@ else:
         "📈 التقرير الربع سنوي",
         "📄 البيانات"
     ])
+    tab_debug = None
 
 # ============================================================
 # 📥 إدخال البيانات
@@ -551,16 +609,15 @@ if tab_input is not None:
         
         fp = get_fiscal_period(month, year)
         
-        # معلومات الفترة
         info_cols = st.columns(4)
         info_cols[0].info(f"🗓️ **{month} {year}**")
         info_cols[1].info(f"💰 السنة المالية: **{fp['fiscal_year']}**")
         if fp["quarter"]:
             info_cols[2].info(f"📅 يُنشئ تقرير: **{fp['quarter']}**")
         else:
-            info_cols[2].info(f"📅 لا يوجد تقرير ربع سنوي هذا الشهر")
+            info_cols[2].info("📅 لا تقرير ربع سنوي هذا الشهر")
         if fp["half"]:
-            info_cols[3].info(f"📊 يُنشئ تقرير: **{fp['half']}**")
+            info_cols[3].info(f"📊 يُنشئ: **{fp['half']}**")
         else:
             info_cols[3].info("")
         
@@ -569,10 +626,8 @@ if tab_input is not None:
             st.success(f"🎯 هذا الشهر يُنشئ تقرير **{fp['quarter']}** للفترة: **{months_str}**")
         
         period_val = f"{month} {year}"
-        
         st.divider()
         
-        # القوائم الشهرية
         st.markdown("## 📋 القوائم الشهرية")
         st.caption("يتم احتساب الأرقام تلقائياً من البيانات المُدخلة")
         
@@ -595,7 +650,6 @@ if tab_input is not None:
                     data_clean = pd.DataFrame(columns=cfg["cols"])
                     st.caption("📝 لا توجد بيانات محفوظة - أضف صفوفاً جديدة")
                 else:
-                    # ⭐ استخدام reindex لضمان وجود كل الأعمدة
                     data_clean = data.reindex(columns=cfg["cols"]).fillna("").reset_index(drop=True)
                     st.success(f"✅ تم استرجاع {len(data_clean)} صف")
                 
@@ -612,7 +666,6 @@ if tab_input is not None:
                 )
                 
                 if not input_rtl.empty:
-                    # ⭐ استخدام reindex أيضاً عند الحفظ
                     input_df = input_rtl.reindex(columns=cfg["cols"]).fillna("")
                 else:
                     input_df = pd.DataFrame(columns=cfg["cols"])
@@ -630,7 +683,6 @@ if tab_input is not None:
         if fp["is_quarter_month"]:
             st.divider()
             st.markdown(f"## 📊 المدخلات الربع سنوية — {fp['quarter']}")
-            st.caption(f"تظهر هذه المدخلات في أشهر: أكتوبر، يناير، أبريل، يوليو")
             
             df_q = load_sheet("البيانات_الربع_سنوية", QUARTERLY_COLUMNS)
             df_q_filtered = pd.DataFrame()
@@ -678,52 +730,33 @@ if tab_input is not None:
             q_notes = st.text_area("ملاحظات", value=str(existing["ملاحظات"]) if existing is not None and "ملاحظات" in existing.index else "", key=f"q_nt_{kp}")
             
             if st.button("💾 حفظ البيانات الربع سنوية", type="primary", key="save_q"):
-                try:
-                    q_data = {
-                        "المعهد": st.session_state.institute,
-                        "المستخدم": st.session_state.username,
-                        "الربع": fp["quarter"],
-                        "السنة المالية": fp["fiscal_year"],
-                        "عدد الباحثين": q_res,
-                        "عدد الأساتذة بدون المتفرغين": q_prof,
-                        "عدد المهندسين": q_eng,
-                        "إجمالي عدد العاملين": q_total,
-                        "المبلغ المنصرف من الموازنة الاستثمارية": q_budget,
-                        "عدد الاجتماعات الدورية": q_periodic,
-                        "عدد اجتماعات مجلس الإدارة": q_board,
-                        "عدد اجتماعات وحدة الفكر": q_think,
-                        "ملاحظات": q_notes,
-                    }
-                    ws = get_or_create_sheet("البيانات_الربع_سنوية", QUARTERLY_COLUMNS)
-                    all_v = ws.get_all_values()
-                    if len(all_v) > 1:
-                        headers = all_v[0]
-                        found = None
-                        for i, r in enumerate(all_v[1:]):
-                            if (len(r) > headers.index("المعهد") and r[headers.index("المعهد")] == st.session_state.institute and
-                                len(r) > headers.index("الربع") and r[headers.index("الربع")] == fp["quarter"] and
-                                len(r) > headers.index("السنة المالية") and r[headers.index("السنة المالية")] == fp["fiscal_year"]):
-                                found = i
-                                break
-                        new_row = [str(q_data.get(c, "")) for c in headers]
-                        if found is not None:
-                            ws.update(f"A{found + 2}", [new_row])
-                        else:
-                            ws.append_row(new_row)
-                    else:
-                        ws.append_row([str(q_data.get(c, "")) for c in QUARTERLY_COLUMNS])
+                q_data = {
+                    "المعهد": st.session_state.institute,
+                    "المستخدم": st.session_state.username,
+                    "الربع": fp["quarter"],
+                    "السنة المالية": fp["fiscal_year"],
+                    "عدد الباحثين": q_res,
+                    "عدد الأساتذة بدون المتفرغين": q_prof,
+                    "عدد المهندسين": q_eng,
+                    "إجمالي عدد العاملين": q_total,
+                    "المبلغ المنصرف من الموازنة الاستثمارية": q_budget,
+                    "عدد الاجتماعات الدورية": q_periodic,
+                    "عدد اجتماعات مجلس الإدارة": q_board,
+                    "عدد اجتماعات وحدة الفكر": q_think,
+                    "ملاحظات": q_notes,
+                }
+                result = save_or_update_row("البيانات_الربع_سنوية", QUARTERLY_COLUMNS, q_data,
+                                            ["المعهد", "الربع", "السنة المالية"])
+                if result:
                     invalidate_all()
-                    st.success("✅ تم حفظ البيانات الربع سنوية")
+                    st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} البيانات الربع سنوية")
                     time.sleep(0.5)
                     st.rerun()
-                except Exception as e:
-                    st.error(f"خطأ: {e}")
         
         # المدخلات النصف سنوية
         if fp["is_half_month"]:
             st.divider()
             st.markdown(f"## 📊 المدخلات النصف سنوية — {fp['half']}")
-            st.caption("تظهر هذه المدخلات في شهري يناير ويوليو")
             
             df_h = load_sheet("البيانات_النصف_سنوية", HALF_COLUMNS)
             df_h_f = pd.DataFrame()
@@ -767,46 +800,27 @@ if tab_input is not None:
                                           format="%.2f", key=f"h_rev_{kp_h}")
             
             if st.button("💾 حفظ البيانات النصف سنوية", type="primary", key="save_h"):
-                try:
-                    h_data = {
-                        "المعهد": st.session_state.institute,
-                        "المستخدم": st.session_state.username,
-                        "النصف": fp["half"],
-                        "السنة المالية": fp["fiscal_year"],
-                        "إجمالي عدد دراسات الخطة البحثية المنجزة": h_studies,
-                        "إجمالي عدد المخرجات التطبيقية من دراسات ومشروعات": h_outputs,
-                        "إجمالي مبلغ الإيرادات الذاتية": h_revenue,
-                    }
-                    ws = get_or_create_sheet("البيانات_النصف_سنوية", HALF_COLUMNS)
-                    all_v = ws.get_all_values()
-                    if len(all_v) > 1:
-                        headers = all_v[0]
-                        found = None
-                        for i, r in enumerate(all_v[1:]):
-                            if (len(r) > headers.index("المعهد") and r[headers.index("المعهد")] == st.session_state.institute and
-                                len(r) > headers.index("النصف") and r[headers.index("النصف")] == fp["half"] and
-                                len(r) > headers.index("السنة المالية") and r[headers.index("السنة المالية")] == fp["fiscal_year"]):
-                                found = i
-                                break
-                        new_row = [str(h_data.get(c, "")) for c in headers]
-                        if found is not None:
-                            ws.update(f"A{found + 2}", [new_row])
-                        else:
-                            ws.append_row(new_row)
-                    else:
-                        ws.append_row([str(h_data.get(c, "")) for c in HALF_COLUMNS])
+                h_data = {
+                    "المعهد": st.session_state.institute,
+                    "المستخدم": st.session_state.username,
+                    "النصف": fp["half"],
+                    "السنة المالية": fp["fiscal_year"],
+                    "إجمالي عدد دراسات الخطة البحثية المنجزة": h_studies,
+                    "إجمالي عدد المخرجات التطبيقية من دراسات ومشروعات": h_outputs,
+                    "إجمالي مبلغ الإيرادات الذاتية": h_revenue,
+                }
+                result = save_or_update_row("البيانات_النصف_سنوية", HALF_COLUMNS, h_data,
+                                            ["المعهد", "النصف", "السنة المالية"])
+                if result:
                     invalidate_all()
-                    st.success("✅ تم حفظ البيانات النصف سنوية")
+                    st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} البيانات النصف سنوية")
                     time.sleep(0.5)
                     st.rerun()
-                except Exception as e:
-                    st.error(f"خطأ: {e}")
         
         # المدخلات السنوية
         if fp["is_annual_month"]:
             st.divider()
             st.markdown("## 📊 المدخلات السنوية")
-            st.caption("تظهر هذه المدخلات في شهر يوليو فقط")
             
             df_a = load_sheet("البيانات_السنوية", ANNUAL_COLUMNS)
             df_a_f = pd.DataFrame()
@@ -830,41 +844,23 @@ if tab_input is not None:
                                           key=f"a_pat_{fp['fiscal_year'].replace('/', '_')}")
             
             if st.button("💾 حفظ البيانات السنوية", type="primary", key="save_a"):
-                try:
-                    a_data = {
-                        "المعهد": st.session_state.institute,
-                        "المستخدم": st.session_state.username,
-                        "السنة المالية": fp["fiscal_year"],
-                        "عدد براءات الاختراع": a_patents,
-                    }
-                    ws = get_or_create_sheet("البيانات_السنوية", ANNUAL_COLUMNS)
-                    all_v = ws.get_all_values()
-                    if len(all_v) > 1:
-                        headers = all_v[0]
-                        found = None
-                        for i, r in enumerate(all_v[1:]):
-                            if (len(r) > headers.index("المعهد") and r[headers.index("المعهد")] == st.session_state.institute and
-                                len(r) > headers.index("السنة المالية") and r[headers.index("السنة المالية")] == fp["fiscal_year"]):
-                                found = i
-                                break
-                        new_row = [str(a_data.get(c, "")) for c in headers]
-                        if found is not None:
-                            ws.update(f"A{found + 2}", [new_row])
-                        else:
-                            ws.append_row(new_row)
-                    else:
-                        ws.append_row([str(a_data.get(c, "")) for c in ANNUAL_COLUMNS])
+                a_data = {
+                    "المعهد": st.session_state.institute,
+                    "المستخدم": st.session_state.username,
+                    "السنة المالية": fp["fiscal_year"],
+                    "عدد براءات الاختراع": a_patents,
+                }
+                result = save_or_update_row("البيانات_السنوية", ANNUAL_COLUMNS, a_data,
+                                            ["المعهد", "السنة المالية"])
+                if result:
                     invalidate_all()
-                    st.success("✅ تم حفظ البيانات السنوية")
+                    st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} البيانات السنوية")
                     time.sleep(0.5)
                     st.rerun()
-                except Exception as e:
-                    st.error(f"خطأ: {e}")
         
-        # معاينة الأرقام المحسوبة
+        # معاينة الأرقام
         st.divider()
         st.markdown("## 📊 معاينة الأرقام المحسوبة تلقائياً")
-        st.caption("هذه الأرقام تُحسب من القوائم الشهرية أعلاه")
         
         kpi_preview = compute_kpi_from_lists(st.session_state.institute, month, year)
         
@@ -881,47 +877,25 @@ if tab_input is not None:
         c4.metric("🎓 الرسائل المنتهية", kpi_preview["رسائل ماجستير ودكتوراه منتهية"])
         
         if st.button("💾 حفظ/تحديث مؤشرات الأداء الشهرية", type="primary", key="save_kpi"):
-            try:
-                kpi_data = {
-                    "المعهد": st.session_state.institute,
-                    "المستخدم": st.session_state.username,
-                    "الشهر": month,
-                    "السنة": int(year),
-                }
-                kpi_data.update(kpi_preview)
-                
-                ws = get_or_create_sheet("KPI_Data", KPI_COLUMNS)
-                all_v = ws.get_all_values()
-                if len(all_v) > 1:
-                    headers = all_v[0]
-                    found = None
-                    for i, r in enumerate(all_v[1:]):
-                        if (len(r) > headers.index("المعهد") and r[headers.index("المعهد")] == st.session_state.institute and
-                            len(r) > headers.index("الشهر") and r[headers.index("الشهر")] == month and
-                            len(r) > headers.index("السنة") and r[headers.index("السنة")] == str(int(year))):
-                            found = i
-                            break
-                    new_row = [str(kpi_data.get(c, "0")) for c in headers]
-                    if found is not None:
-                        ws.update(f"A{found + 2}", [new_row])
-                        msg = "✅ تم تحديث مؤشرات الأداء"
-                    else:
-                        ws.append_row(new_row)
-                        msg = "✅ تم حفظ مؤشرات الأداء"
-                else:
-                    ws.append_row([str(kpi_data.get(c, "0")) for c in KPI_COLUMNS])
-                    msg = "✅ تم حفظ مؤشرات الأداء"
-                
+            kpi_data = {
+                "المعهد": st.session_state.institute,
+                "المستخدم": st.session_state.username,
+                "الشهر": month,
+                "السنة": int(year),
+            }
+            kpi_data.update(kpi_preview)
+            
+            result = save_or_update_row("KPI_Data", KPI_COLUMNS, kpi_data,
+                                        ["المعهد", "الشهر", "السنة"])
+            if result:
                 invalidate_all()
-                st.success(msg)
+                st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} مؤشرات الأداء")
                 st.balloons()
                 time.sleep(0.5)
                 st.rerun()
-            except Exception as e:
-                st.error(f"خطأ: {e}")
 
 # ============================================================
-# 📊 Dashboard الشهري
+# 📊 Dashboard
 # ============================================================
 if 'tab_dash' in dir() and tab_dash is not None:
     with tab_dash:
@@ -932,7 +906,7 @@ if 'tab_dash' in dir() and tab_dash is not None:
             df_m = df_m[df_m["المعهد"] == st.session_state.institute]
         
         if df_m.empty:
-            st.info("📭 لا توجد بيانات - ابدأ بإدخال البيانات أولاً")
+            st.info("📭 لا توجد بيانات - ابدأ بإدخال البيانات من تبويب (إدخال البيانات) ثم اضغط على زر (حفظ مؤشرات الأداء)")
         else:
             text_cols = ["المعهد", "المستخدم", "الشهر", "السنة"]
             for col in df_m.columns:
@@ -984,14 +958,13 @@ if 'tab_dash' in dir() and tab_dash is not None:
                     st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
-# 📈 التقرير الربع سنوي - النسخة المُصححة
+# 📈 التقرير الربع سنوي
 # ============================================================
 if tab_q_dash is not None:
     with tab_q_dash:
         st.title("📈 التقرير الربع سنوي")
         st.caption("يُبنى تلقائياً من البيانات الشهرية + الربع سنوية + النصف سنوية + السنوية")
         
-        # اختيار الفترة
         c1, c2, c3 = st.columns(3)
         with c1:
             q_options = ["الربع الأول", "الربع الثاني", "الربع الثالث", "الربع الرابع"]
@@ -1009,24 +982,20 @@ if tab_q_dash is not None:
             else:
                 sel_inst = st.session_state.institute
         
-        # ⭐ تحديد أشهر الربع بناءً على المنطق الجديد
         fy_start = int(sel_fy.split("/")[0])
         fy_end = int(sel_fy.split("/")[1])
         
-        # السنة المالية من يوليو إلى يونيو
-        # Q1: يوليو-سبتمبر | Q2: أكتوبر-ديسمبر | Q3: يناير-مارس | Q4: أبريل-يونيو
         if sel_q == "الربع الأول":
             q_months = [("يوليو", fy_start), ("أغسطس", fy_start), ("سبتمبر", fy_start)]
         elif sel_q == "الربع الثاني":
             q_months = [("أكتوبر", fy_start), ("نوفمبر", fy_start), ("ديسمبر", fy_start)]
         elif sel_q == "الربع الثالث":
             q_months = [("يناير", fy_end), ("فبراير", fy_end), ("مارس", fy_end)]
-        else:  # الربع الرابع
+        else:
             q_months = [("أبريل", fy_end), ("مايو", fy_end), ("يونيو", fy_end)]
         
         st.info(f"📅 يشمل: {' + '.join([f'{m} {y}' for m, y in q_months])}")
         
-        # تحميل البيانات
         kpi_df = load_sheet("KPI_Data", KPI_COLUMNS)
         if kpi_df.empty:
             st.warning("لا توجد بيانات شهرية")
@@ -1049,7 +1018,7 @@ if tab_q_dash is not None:
                     if col not in text_cols:
                         q_df[col] = pd.to_numeric(q_df[col], errors="coerce").fillna(0)
                 
-                st.markdown("## 📊 ملخص الربع (مجموع الأشهر)")
+                st.markdown("## 📊 ملخص الربع")
                 agg = q_df.groupby("المعهد").sum(numeric_only=True).reset_index()
                 
                 st.subheader("🎯 المؤشرات الرئيسية")
@@ -1087,9 +1056,7 @@ if tab_q_dash is not None:
                                 c3.metric("🏛️ مجلس الإدارة", row.get("عدد اجتماعات مجلس الإدارة", 0))
                                 c4.metric("💡 وحدة الفكر", row.get("عدد اجتماعات وحدة الفكر", 0))
                 
-                # البيانات النصف سنوية
-                # النصف الأول ينتهي في ديسمبر (يظهر في تقرير Q2)
-                # النصف الثاني ينتهي في يونيو (يظهر في تقرير Q4)
+                # النصف سنوي - يظهر في Q2 (نهاية ديسمبر) و Q4 (نهاية يونيو)
                 half_to_show = None
                 if sel_q == "الربع الثاني":
                     half_to_show = "النصف الأول"
@@ -1120,7 +1087,7 @@ if tab_q_dash is not None:
                                     c3.metric("💰 الإيرادات الذاتية",
                                               f"{float(row.get('إجمالي مبلغ الإيرادات الذاتية', 0) or 0):.2f}")
                 
-                # البيانات السنوية (تظهر في تقرير Q4 لأن السنة المالية تنتهي في يونيو)
+                # السنوي - يظهر في Q4
                 if sel_q == "الربع الرابع":
                     st.markdown("## 📊 البيانات السنوية")
                     df_a = load_sheet("البيانات_السنوية", ANNUAL_COLUMNS)
@@ -1139,7 +1106,6 @@ if tab_q_dash is not None:
                                     st.metric("🔬 عدد براءات الاختراع",
                                               row.get("عدد براءات الاختراع", 0))
                 
-                # الجدول الشامل
                 st.divider()
                 st.markdown("## 📄 الجدول الشامل")
                 st.dataframe(rtl_display(q_df), use_container_width=True, hide_index=True)
@@ -1181,3 +1147,41 @@ if tab_data is not None:
             st.download_button("📥 تحميل Excel", data=to_excel(kpi_df),
                               file_name=f"kpi_data_{datetime.now().strftime('%Y%m%d')}.xlsx",
                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ============================================================
+# 🔧 تشخيص (للأدمن فقط)
+# ============================================================
+if tab_debug is not None:
+    with tab_debug:
+        st.title("🔧 تشخيص البيانات")
+        
+        st.markdown("### 📋 حالة الأوراق في Google Sheets")
+        
+        sheets_to_check = [
+            "KPI_Data", "البيانات_الربع_سنوية", "البيانات_النصف_سنوية",
+            "البيانات_السنوية"
+        ] + list(MONTHLY_LISTS.keys())
+        
+        for sname in sheets_to_check:
+            try:
+                all_v = fetch_data(sname)
+                rows_count = max(0, len(all_v) - 1) if all_v else 0
+                has_headers = len(all_v) > 0
+                status = "✅" if rows_count > 0 else "⚠️"
+                st.write(f"{status} **{sname}** — {rows_count} صف بيانات، العناوين: {'نعم' if has_headers else 'لا'}")
+            except Exception as e:
+                st.write(f"❌ **{sname}** — خطأ: {e}")
+        
+        st.divider()
+        st.markdown("### 📊 محتوى KPI_Data الخام")
+        kpi_raw = fetch_data("KPI_Data")
+        if kpi_raw:
+            st.write(f"عدد الصفوف: {len(kpi_raw)}")
+            if len(kpi_raw) > 0:
+                st.write("**العناوين:**")
+                st.write(kpi_raw[0])
+            if len(kpi_raw) > 1:
+                st.write("**أول صف بيانات:**")
+                st.write(kpi_raw[1])
+        else:
+            st.warning("KPI_Data فارغة تماماً")
