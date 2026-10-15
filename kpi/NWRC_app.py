@@ -1108,7 +1108,7 @@ if tab_q_dash is not None:
             q_options = ["الربع الأول", "الربع الثاني", "الربع الثالث", "الربع الرابع"]
             sel_q = st.selectbox("الربع", q_options, key="report_q")
         with c2:
-            fy_opts = ["2025/2026", "2026/2027", "2027/2028"]
+            fy_opts = ["2025/2026", "2026/2027", "2027/2028", "2028/2029", "2029/2030", "2030/2031", "2031/2032", "2032/2033"]
             sel_fy = st.selectbox("السنة المالية", fy_opts, key="report_fy")
         with c3:
             if st.session_state.role == "admin":
