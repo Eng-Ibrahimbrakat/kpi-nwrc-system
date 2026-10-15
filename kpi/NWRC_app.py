@@ -113,14 +113,30 @@ def _fetch_cached(sheet_name, _bust=0):
 def fetch_data(sheet_name):
     return _fetch_cached(sheet_name, _bust=st.session_state.get("data_bust", 0))
 
+# ============================================================
+# ⭐ دوال الـ Cache - النسخة المُصححة
+# ============================================================
 def invalidate_all():
-    """مسح كل الـ cache"""
+    """
+    مسح cache Sheets فقط - يحافظ على _saved_ في session_state
+    يُستدعى بعد كل حفظ لتحديث البيانات من Google Sheets
+    """
     st.session_state.gs_bust = st.session_state.get("gs_bust", 0) + 1
     st.session_state.data_bust = st.session_state.get("data_bust", 0) + 1
     _fetch_cached.clear()
-    # ⭐ مسح البيانات المؤقتة المحفوظة
+    # ⭐ مسح cache الداتافريم فقط (وليس _saved_)
     for key in list(st.session_state.keys()):
-        if key.startswith("_saved_") or key.startswith("_cd_"):
+        if key.startswith("_cd_") or key.startswith("_cb_"):
+            del st.session_state[key]
+
+def reset_all():
+    """
+    إعادة تعيين شاملة - تُستدعى فقط عند زر التحديث اليدوي أو تسجيل الخروج
+    """
+    invalidate_all()
+    # مسح _saved_ أيضاً
+    for key in list(st.session_state.keys()):
+        if key.startswith("_saved_"):
             del st.session_state[key]
 
 def fix_encoding(t):
@@ -172,7 +188,7 @@ def load_sheet(sheet_name, columns):
     return df
 
 # ============================================================
-# ⭐ save_list - النسخة المُصححة (تحفظ في session_state أيضاً)
+# ⭐ save_list - النسخة المُصححة (تحفظ في session_state)
 # ============================================================
 def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val):
     try:
@@ -181,6 +197,7 @@ def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val
         if ws is None:
             st.error("فشل الاتصال")
             return False
+        
         all_values = ws.get_all_values()
         kept = []
         if len(all_values) > 1:
@@ -188,10 +205,12 @@ def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val
             if "المعهد" in existing.columns and period_key in existing.columns:
                 mask = ~((existing["المعهد"] == institute) & (existing[period_key] == period_val))
                 kept = existing[mask].values.tolist()
+        
         ws.clear()
         ws.append_row(full_cols)
         if kept:
             ws.append_rows([[str(v) for v in r] for r in kept])
+        
         new_rows = []
         for _, row in input_df.iterrows():
             vals = [str(v) if pd.notna(v) else "" for v in row.tolist()]
@@ -201,24 +220,28 @@ def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val
         if new_rows:
             ws.append_rows(new_rows)
         
-        # ⭐ حفظ البيانات في session_state لاستخدامها في المعاينة فوراً
+        # ⭐⭐ حفظ البيانات في session_state (نستخدم same index/columns)
+        clean_df = input_df.copy().reset_index(drop=True)
         save_key = f"_saved_{sheet_name}_{institute}_{period_val}"
-        st.session_state[save_key] = input_df.copy()
+        st.session_state[save_key] = clean_df
+        st.session_state["last_save_time"] = datetime.now().strftime("%H:%M:%S")
         
-        invalidate_all()
+        # ⭐ مسح cache Sheets فقط (لا يمسح _saved_)
+        st.session_state.data_bust = st.session_state.get("data_bust", 0) + 1
+        _fetch_cached.clear()
+        for key in list(st.session_state.keys()):
+            if key.startswith("_cd_") or key.startswith("_cb_"):
+                del st.session_state[key]
+        
         return True
     except Exception as e:
         st.error(f"خطأ في الحفظ: {e}")
         return False
 
 # ============================================================
-# ⭐ save_or_update_row - النسخة الآمنة (clear + append_rows)
+# save_or_update_row
 # ============================================================
 def save_or_update_row(sheet_name, all_cols, data_dict, key_cols):
-    """
-    حفظ أو تحديث صف بأمان.
-    يعتمد على clear() + append_rows() بدلاً من update() لتجنب مشاكل النطاقات.
-    """
     try:
         ws = get_or_create_sheet(sheet_name, all_cols)
         if ws is None:
@@ -433,21 +456,25 @@ def get_fiscal_period(month, year):
     return result
 
 # ============================================================
-# ⭐ compute_kpi_from_lists - النسخة المُصححة (تقرأ من session_state)
+# ⭐ compute_kpi_from_lists - النسخة المُصححة
 # ============================================================
 def compute_kpi_from_lists(institute, month, year):
+    """
+    حساب KPI من القوائم.
+    الأولوية: session_state (_saved_) ← ثم Google Sheets
+    """
     period = f"{month} {year}"
     kpi = {c: 0 for c in KPI_COLUMNS if c not in ["المعهد", "المستخدم", "الشهر", "السنة"]}
     
     def get_list(name):
-        # ⭐ اقرأ من session_state أولاً (البيانات المُحفوظة مؤخراً)
+        # ⭐ أولاً: اقرأ من session_state (البيانات المُحفوظة مؤخراً)
         save_key = f"_saved_{name}_{institute}_{period}"
         if save_key in st.session_state:
             df = st.session_state[save_key].copy()
             df["المعهد"] = institute
             df["الفترة"] = period
             return df
-        # وإلا اقرأ من Google Sheets
+        # ثانياً: اقرأ من Google Sheets
         cols = MONTHLY_LISTS[name]["cols"] + ["المعهد", "الفترة"]
         df = load_sheet(name, cols)
         if df.empty or "المعهد" not in df.columns or "الفترة" not in df.columns:
@@ -457,6 +484,7 @@ def compute_kpi_from_lists(institute, month, year):
     def to_num(series):
         return pd.to_numeric(series, errors="coerce").fillna(0)
     
+    # 1. الدراسات
     s = get_list("الدراسات_الجارية")
     if not s.empty and "النوع" in s.columns:
         kpi["دراسات خطة بحثية جارية"] = int((s["النوع"] == T_RESEARCH).sum())
@@ -466,25 +494,30 @@ def compute_kpi_from_lists(institute, month, year):
                                        kpi["دراسات استشارية جارية"] +
                                        kpi["مشروعات بحثية جارية"])
     
+    # 2. التقارير
     s = get_list("التقارير_الصادرة")
     if not s.empty and "النوع" in s.columns:
         kpi["تقرير مرحلي"] = int((s["النوع"] == T_REP_PROGRESS).sum())
         kpi["تقرير نهائي"] = int((s["النوع"] == T_REP_FINAL).sum())
     kpi["إجمالي التقارير"] = kpi["تقرير مرحلي"] + kpi["تقرير نهائي"]
     
+    # 3. المذكرات
     s = get_list("المذكرات_الصادرة")
     kpi["المذكرات"] = len(s) if not s.empty else 0
     
+    # 4. المقترحات
     s = get_list("المقترحات")
     if not s.empty and "النوع" in s.columns:
         kpi["مقترحات دراسات استشارية"] = int((s["النوع"] == T_PROP_CONSULT).sum())
         kpi["مقترحات مشروعات بحثية"] = int((s["النوع"] == T_PROP_PROJECTS).sum())
     kpi["إجمالي المقترحات"] = kpi["مقترحات دراسات استشارية"] + kpi["مقترحات مشروعات بحثية"]
     
+    # 5. المأموريات
     s = get_list("المأموريات_الحقلية")
     if not s.empty and "عدد الأيام" in s.columns:
         kpi["إجمالي أيام المأموريات"] = int(to_num(s["عدد الأيام"]).sum())
     
+    # 6. التدريب
     s = get_list("التدريب")
     if not s.empty:
         if "عدد المتدربين" in s.columns:
@@ -496,6 +529,7 @@ def compute_kpi_from_lists(institute, month, year):
             kpi["أيام تدريب داخل المعهد"] = int(days[s["المكان"] == T_TRAIN_IN].sum())
             kpi["أيام تدريب خارج المعهد"] = int(days[s["المكان"] == T_TRAIN_OUT].sum())
     
+    # 7. الأنشطة
     s = get_list("الأنشطة_العلمية")
     if not s.empty and "عدد المشاركين" in s.columns:
         parts = to_num(s["عدد المشاركين"])
@@ -503,6 +537,7 @@ def compute_kpi_from_lists(institute, month, year):
         kpi["مشتركين ورش عمل"] = int(parts[s["النوع"] == T_ACT_WORKSHOP].sum())
     kpi["إجمالي المشاركين في أنشطة علمية"] = kpi["مشتركين مؤتمرات"] + kpi["مشتركين ورش عمل"]
     
+    # 8. الاجتماعات
     s = get_list("الاجتماعات")
     if not s.empty and "النوع" in s.columns:
         kpi["اجتماعات بالوزارة"] = int((s["النوع"] == T_MEET_MINISTRY).sum())
@@ -511,11 +546,13 @@ def compute_kpi_from_lists(institute, month, year):
     kpi["إجمالي الاجتماعات"] = (kpi["اجتماعات بالوزارة"] + kpi["اجتماعات بالمركز"] +
                                  kpi["اجتماعات جهات خارجية"])
     
+    # 9. الأوراق البحثية
     s = get_list("الأوراق_البحثية")
     if not s.empty and "النوع" in s.columns:
         kpi["أوراق بحثية منشورة"] = int((s["النوع"] == T_PAPER_LOCAL).sum())
         kpi["أوراق بحثية دولية منشورة"] = int((s["النوع"] == T_PAPER_INTL).sum())
     
+    # 10. الرسائل
     s = get_list("الرسائل_العلمية")
     kpi["رسائل ماجستير ودكتوراه منتهية"] = len(s) if not s.empty else 0
     
@@ -562,7 +599,7 @@ if not st.session_state.logged_in:
                 st.session_state.username = username
                 st.session_state.role = USERS[username]["role"]
                 st.session_state.institute = USERS[username]["institute"]
-                invalidate_all()
+                reset_all()
                 st.rerun()
             else:
                 st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
@@ -576,7 +613,7 @@ with c_head[0]:
     st.success(f"👤 مرحباً **{st.session_state.username}** — 🏢 {st.session_state.institute}")
 with c_head[1]:
     if st.button("🔄 تحديث"):
-        invalidate_all()
+        reset_all()
         st.rerun()
 with c_head[2]:
     if st.button("🚪 خروج"):
@@ -619,6 +656,7 @@ if tab_input is not None:
             year = st.number_input("السنة", min_value=2020, max_value=2035, value=2026, key="m_year")
         
         fp = get_fiscal_period(month, year)
+        period_val = f"{month} {year}"
         
         info_cols = st.columns(4)
         info_cols[0].info(f"🗓️ **{month} {year}**")
@@ -636,9 +674,11 @@ if tab_input is not None:
             months_str = " + ".join([f"{m} {y}" for m, y in fp["months_for_quarter"]])
             st.success(f"🎯 هذا الشهر يُنشئ تقرير **{fp['quarter']}** للفترة: **{months_str}**")
         
-        period_val = f"{month} {year}"
         st.divider()
         
+        # ============================================================
+        # القوائم الشهرية
+        # ============================================================
         st.markdown("## 📋 القوائم الشهرية")
         st.caption("يتم احتساب الأرقام تلقائياً من البيانات المُدخلة")
         
@@ -650,14 +690,19 @@ if tab_input is not None:
                 if cfg["hint"]:
                     st.info(f"💡 {cfg['hint']}")
                 
-                full_cols = cfg["cols"] + ["المعهد", "الفترة"]
-                
-                # ⭐ تحقق أولاً من session_state
+                # ⭐ اقرأ من session_state أولاً (البيانات الأخيرة)
                 save_key = f"_saved_{sheet_name}_{st.session_state.institute}_{period_val}"
                 if save_key in st.session_state:
                     data_clean = st.session_state[save_key].copy()
-                    st.info(f"✅ تم تحميل {len(data_clean)} صف من الذاكرة المؤقتة")
+                    # تأكد من وجود الأعمدة
+                    for col in cfg["cols"]:
+                        if col not in data_clean.columns:
+                            data_clean[col] = ""
+                    data_clean = data_clean[cfg["cols"]]
+                    st.info(f"💾 {len(data_clean)} صف من الذاكرة المؤقتة (بعد آخر حفظ)")
                 else:
+                    # اقرأ من Google Sheets
+                    full_cols = cfg["cols"] + ["المعهد", "الفترة"]
                     data = load_sheet(sheet_name, full_cols)
                     
                     if not data.empty and "المعهد" in data.columns and "الفترة" in data.columns:
@@ -669,7 +714,7 @@ if tab_input is not None:
                         st.caption("📝 لا توجد بيانات محفوظة - أضف صفوفاً جديدة")
                     else:
                         data_clean = data.reindex(columns=cfg["cols"]).fillna("").reset_index(drop=True)
-                        st.success(f"✅ تم استرجاع {len(data_clean)} صف")
+                        st.success(f"✅ تم استرجاع {len(data_clean)} صف من Google Sheets")
                 
                 editor_key = f"{sheet_name}_ed_{period_val}_{st.session_state.editor_counter}"
                 
@@ -692,12 +737,14 @@ if tab_input is not None:
                     if save_list(sheet_name, input_df, cfg["cols"],
                                  st.session_state.institute, "الفترة", period_val):
                         st.session_state.editor_counter = st.session_state.get("editor_counter", 0) + 1
-                        st.success("✅ تم الحفظ")
+                        st.success(f"✅ تم الحفظ - الأرقام ستُحدَّث فوراً في المعاينة")
                         st.balloons()
                         time.sleep(0.3)
                         st.rerun()
         
+        # ============================================================
         # المدخلات الربع سنوية
+        # ============================================================
         if fp["is_quarter_month"]:
             st.divider()
             st.markdown(f"## 📊 المدخلات الربع سنوية — {fp['quarter']}")
@@ -771,7 +818,9 @@ if tab_input is not None:
                     time.sleep(0.5)
                     st.rerun()
         
+        # ============================================================
         # المدخلات النصف سنوية
+        # ============================================================
         if fp["is_half_month"]:
             st.divider()
             st.markdown(f"## 📊 المدخلات النصف سنوية — {fp['half']}")
@@ -835,7 +884,9 @@ if tab_input is not None:
                     time.sleep(0.5)
                     st.rerun()
         
+        # ============================================================
         # المدخلات السنوية
+        # ============================================================
         if fp["is_annual_month"]:
             st.divider()
             st.markdown("## 📊 المدخلات السنوية")
@@ -876,13 +927,27 @@ if tab_input is not None:
                     time.sleep(0.5)
                     st.rerun()
         
-        # معاينة الأرقام
+        # ============================================================
+        # ⭐ معاينة الأرقام - النسخة المُصححة
+        # ============================================================
         st.divider()
         st.markdown("## 📊 معاينة الأرقام المحسوبة تلقائياً")
         st.caption("هذه الأرقام تُحسب من القوائم المُدخلة أعلاه (تُحدَّث فوراً بعد الحفظ)")
         
+        # حساب KPI
         kpi_preview = compute_kpi_from_lists(st.session_state.institute, month, year)
         
+        # عرض مصدر البيانات
+        period_check = f"{month} {year}"
+        saved_count = sum(1 for k in st.session_state.keys()
+                          if k.startswith("_saved_") and period_check in k)
+        last_save = st.session_state.get("last_save_time", "")
+        if saved_count > 0:
+            st.success(f"🔵 مصدر البيانات: {saved_count} قائمة محفوظة مؤقتاً — آخر حفظ: {last_save}")
+        else:
+            st.info(f"⚪ مصدر البيانات: Google Sheets (لم يتم الحفظ في هذه الجلسة بعد)")
+        
+        # عرض المؤشرات
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("📚 إجمالي الدراسات", kpi_preview["إجمالي الدراسات الجارية"])
         c2.metric("📄 إجمالي التقارير", kpi_preview["إجمالي التقارير"])
@@ -895,6 +960,14 @@ if tab_input is not None:
         c3.metric("📝 الأوراق المنشورة", kpi_preview["أوراق بحثية منشورة"])
         c4.metric("🎓 الرسائل المنتهية", kpi_preview["رسائل ماجستير ودكتوراه منتهية"])
         
+        # تفاصيل إضافية
+        with st.expander("📋 تفاصيل جميع المؤشرات"):
+            detail_df = pd.DataFrame([kpi_preview]).T
+            detail_df.columns = ["القيمة"]
+            detail_df.index.name = "المؤشر"
+            st.dataframe(detail_df, use_container_width=True)
+        
+        # زر الحفظ
         if st.button("💾 حفظ/تحديث مؤشرات الأداء الشهرية", type="primary", key="save_kpi"):
             kpi_data = {
                 "المعهد": st.session_state.institute,
@@ -908,7 +981,7 @@ if tab_input is not None:
                                         ["المعهد", "الشهر", "السنة"])
             if result:
                 invalidate_all()
-                st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} مؤشرات الأداء")
+                st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} مؤشرات الأداء — اذهب للـ Dashboard لعرضها")
                 st.balloons()
                 time.sleep(0.5)
                 st.rerun()
@@ -975,6 +1048,10 @@ if 'tab_dash' in dir() and tab_dash is not None:
                     st.markdown("#### 👥 التدريب")
                     fig = px.bar(df_m, x="المعهد", y=["المتدربين", "المدربين"], barmode="group")
                     st.plotly_chart(fig, use_container_width=True)
+            
+            st.divider()
+            st.markdown("### 📄 البيانات التفصيلية")
+            st.dataframe(rtl_display(df_m), use_container_width=True, hide_index=True)
 
 # ============================================================
 # 📈 التقرير الربع سنوي
@@ -1190,6 +1267,20 @@ if tab_debug is not None:
                 st.write(f"{status} **{sname}** — {rows_count} صف بيانات، العناوين: {'نعم' if has_headers else 'لا'}")
             except Exception as e:
                 st.write(f"❌ **{sname}** — خطأ: {e}")
+        
+        st.divider()
+        st.markdown("### 💾 session_state للبيانات المؤقتة")
+        saved_keys = [k for k in st.session_state.keys() if k.startswith("_saved_")]
+        if saved_keys:
+            for k in saved_keys:
+                df_temp = st.session_state[k]
+                st.write(f"- `{k}` → {len(df_temp)} صف")
+        else:
+            st.write("لا توجد بيانات مؤقتة محفوظة في هذه الجلسة")
+        
+        st.write(f"**data_bust:** {st.session_state.get('data_bust', 0)}")
+        st.write(f"**gs_bust:** {st.session_state.get('gs_bust', 0)}")
+        st.write(f"**آخر حفظ:** {st.session_state.get('last_save_time', 'لا يوجد')}")
         
         st.divider()
         st.markdown("### 📊 محتوى KPI_Data الخام")
