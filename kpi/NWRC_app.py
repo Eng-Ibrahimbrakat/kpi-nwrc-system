@@ -39,17 +39,9 @@ h1, h2, h3, h4, h5, h6 { direction: rtl; text-align: right; }
 """, unsafe_allow_html=True)
 
 # ============================================================
-# دوال Google Sheets
+# Google Sheets
 # ============================================================
 SPREADSHEET_KEY = "1QSfmNo9U0TNvdwRgLhLBgVNZbiL8wVcoWlffBz6cSfg"
-
-def col_letter(n):
-    """تحويل رقم العمود (1-based) إلى حرف (A, B, ..., Z, AA, AB, ...)"""
-    result = ""
-    while n > 0:
-        n, r = divmod(n - 1, 26)
-        result = chr(65 + r) + result
-    return result
 
 @st.cache_resource(show_spinner=False)
 def _get_client():
@@ -122,9 +114,14 @@ def fetch_data(sheet_name):
     return _fetch_cached(sheet_name, _bust=st.session_state.get("data_bust", 0))
 
 def invalidate_all():
+    """مسح كل الـ cache"""
     st.session_state.gs_bust = st.session_state.get("gs_bust", 0) + 1
     st.session_state.data_bust = st.session_state.get("data_bust", 0) + 1
     _fetch_cached.clear()
+    # ⭐ مسح البيانات المؤقتة المحفوظة
+    for key in list(st.session_state.keys()):
+        if key.startswith("_saved_") or key.startswith("_cd_"):
+            del st.session_state[key]
 
 def fix_encoding(t):
     if isinstance(t, str):
@@ -174,6 +171,9 @@ def load_sheet(sheet_name, columns):
     st.session_state[bust_key] = cur_bust
     return df
 
+# ============================================================
+# ⭐ save_list - النسخة المُصححة (تحفظ في session_state أيضاً)
+# ============================================================
 def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val):
     try:
         full_cols = base_cols + ["المعهد", period_key]
@@ -200,6 +200,11 @@ def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val
             new_rows.append(vals + [institute, period_val])
         if new_rows:
             ws.append_rows(new_rows)
+        
+        # ⭐ حفظ البيانات في session_state لاستخدامها في المعاينة فوراً
+        save_key = f"_saved_{sheet_name}_{institute}_{period_val}"
+        st.session_state[save_key] = input_df.copy()
+        
         invalidate_all()
         return True
     except Exception as e:
@@ -207,7 +212,7 @@ def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val
         return False
 
 # ============================================================
-# ⭐ دالة حفظ/تحديث KPI - النسخة النهائية المُصححة
+# ⭐ save_or_update_row - النسخة الآمنة (clear + append_rows)
 # ============================================================
 def save_or_update_row(sheet_name, all_cols, data_dict, key_cols):
     """
@@ -220,37 +225,28 @@ def save_or_update_row(sheet_name, all_cols, data_dict, key_cols):
             st.error(f"فشل الوصول للورقة {sheet_name}")
             return None
         
-        # قراءة كل البيانات الحالية
         all_v = ws.get_all_values()
         
-        # تجهيز البيانات الجديدة
         if len(all_v) == 0:
-            # ورقة فارغة تماماً → إنشاء العناوين + الصف الأول
             new_data = [
                 list(all_cols),
                 [str(data_dict.get(c, "0")) for c in all_cols]
             ]
             result = "added"
         else:
-            # الورقة فيها عناوين
             headers = all_v[0]
-            
-            # ملء العناوين لو ناقصة
             for c in all_cols:
                 if c not in headers:
                     headers.append(c)
             
-            # بناء البيانات الجديدة
             new_data = [headers]
             found = False
             expected_len = len(headers)
             
             for row in all_v[1:]:
-                # توحيد طول الصف
                 row_list = list(row) + [""] * (expected_len - len(row))
                 row_list = row_list[:expected_len]
                 
-                # هل هذا هو الصف المطلوب تحديثه؟
                 is_match = True
                 for k in key_cols:
                     if k in headers:
@@ -263,7 +259,6 @@ def save_or_update_row(sheet_name, all_cols, data_dict, key_cols):
                         break
                 
                 if is_match:
-                    # تحديث الصف
                     new_row = [str(data_dict.get(h, "0")) for h in headers]
                     new_data.append(new_row)
                     found = True
@@ -271,24 +266,20 @@ def save_or_update_row(sheet_name, all_cols, data_dict, key_cols):
                     new_data.append(row_list)
             
             if not found:
-                # إضافة صف جديد
                 new_row = [str(data_dict.get(h, "0")) for h in headers]
                 new_data.append(new_row)
                 result = "added"
             else:
                 result = "updated"
         
-        # ⭐ حذف كل شيء وإعادة الكتابة
-        # هذا يتجنب مشاكل ws.update() تماماً
         ws.clear()
         ws.append_rows(new_data, value_input_option="USER_ENTERED")
         
         return result
     except Exception as e:
         st.error(f"خطأ في الحفظ: {e}")
-        import traceback
-        st.error(traceback.format_exc())
         return None
+
 # ============================================================
 # ثوابت
 # ============================================================
@@ -442,13 +433,21 @@ def get_fiscal_period(month, year):
     return result
 
 # ============================================================
-# حساب KPI
+# ⭐ compute_kpi_from_lists - النسخة المُصححة (تقرأ من session_state)
 # ============================================================
 def compute_kpi_from_lists(institute, month, year):
     period = f"{month} {year}"
     kpi = {c: 0 for c in KPI_COLUMNS if c not in ["المعهد", "المستخدم", "الشهر", "السنة"]}
     
     def get_list(name):
+        # ⭐ اقرأ من session_state أولاً (البيانات المُحفوظة مؤخراً)
+        save_key = f"_saved_{name}_{institute}_{period}"
+        if save_key in st.session_state:
+            df = st.session_state[save_key].copy()
+            df["المعهد"] = institute
+            df["الفترة"] = period
+            return df
+        # وإلا اقرأ من Google Sheets
         cols = MONTHLY_LISTS[name]["cols"] + ["المعهد", "الفترة"]
         df = load_sheet(name, cols)
         if df.empty or "المعهد" not in df.columns or "الفترة" not in df.columns:
@@ -652,18 +651,25 @@ if tab_input is not None:
                     st.info(f"💡 {cfg['hint']}")
                 
                 full_cols = cfg["cols"] + ["المعهد", "الفترة"]
-                data = load_sheet(sheet_name, full_cols)
                 
-                if not data.empty and "المعهد" in data.columns and "الفترة" in data.columns:
-                    data = data[(data["المعهد"] == st.session_state.institute) &
-                                (data["الفترة"] == period_val)]
-                
-                if data.empty:
-                    data_clean = pd.DataFrame(columns=cfg["cols"])
-                    st.caption("📝 لا توجد بيانات محفوظة - أضف صفوفاً جديدة")
+                # ⭐ تحقق أولاً من session_state
+                save_key = f"_saved_{sheet_name}_{st.session_state.institute}_{period_val}"
+                if save_key in st.session_state:
+                    data_clean = st.session_state[save_key].copy()
+                    st.info(f"✅ تم تحميل {len(data_clean)} صف من الذاكرة المؤقتة")
                 else:
-                    data_clean = data.reindex(columns=cfg["cols"]).fillna("").reset_index(drop=True)
-                    st.success(f"✅ تم استرجاع {len(data_clean)} صف")
+                    data = load_sheet(sheet_name, full_cols)
+                    
+                    if not data.empty and "المعهد" in data.columns and "الفترة" in data.columns:
+                        data = data[(data["المعهد"] == st.session_state.institute) &
+                                    (data["الفترة"] == period_val)]
+                    
+                    if data.empty:
+                        data_clean = pd.DataFrame(columns=cfg["cols"])
+                        st.caption("📝 لا توجد بيانات محفوظة - أضف صفوفاً جديدة")
+                    else:
+                        data_clean = data.reindex(columns=cfg["cols"]).fillna("").reset_index(drop=True)
+                        st.success(f"✅ تم استرجاع {len(data_clean)} صف")
                 
                 editor_key = f"{sheet_name}_ed_{period_val}_{st.session_state.editor_counter}"
                 
@@ -688,7 +694,7 @@ if tab_input is not None:
                         st.session_state.editor_counter = st.session_state.get("editor_counter", 0) + 1
                         st.success("✅ تم الحفظ")
                         st.balloons()
-                        time.sleep(0.5)
+                        time.sleep(0.3)
                         st.rerun()
         
         # المدخلات الربع سنوية
@@ -873,6 +879,7 @@ if tab_input is not None:
         # معاينة الأرقام
         st.divider()
         st.markdown("## 📊 معاينة الأرقام المحسوبة تلقائياً")
+        st.caption("هذه الأرقام تُحسب من القوائم المُدخلة أعلاه (تُحدَّث فوراً بعد الحفظ)")
         
         kpi_preview = compute_kpi_from_lists(st.session_state.institute, month, year)
         
@@ -918,7 +925,7 @@ if 'tab_dash' in dir() and tab_dash is not None:
             df_m = df_m[df_m["المعهد"] == st.session_state.institute]
         
         if df_m.empty:
-            st.info("📭 لا توجد بيانات - ابدأ بإدخال البيانات من تبويب (إدخال البيانات) ثم اضغط على زر (حفظ مؤشرات الأداء)")
+            st.info("📭 لا توجد بيانات - ابدأ بإدخال البيانات من تبويب (إدخال البيانات) ثم اضغط على زر (حفظ مؤشرات الأداء الشهرية)")
         else:
             text_cols = ["المعهد", "المستخدم", "الشهر", "السنة"]
             for col in df_m.columns:
@@ -1068,7 +1075,7 @@ if tab_q_dash is not None:
                                 c3.metric("🏛️ مجلس الإدارة", row.get("عدد اجتماعات مجلس الإدارة", 0))
                                 c4.metric("💡 وحدة الفكر", row.get("عدد اجتماعات وحدة الفكر", 0))
                 
-                # النصف سنوي - يظهر في Q2 (نهاية ديسمبر) و Q4 (نهاية يونيو)
+                # النصف سنوي
                 half_to_show = None
                 if sel_q == "الربع الثاني":
                     half_to_show = "النصف الأول"
@@ -1099,7 +1106,7 @@ if tab_q_dash is not None:
                                     c3.metric("💰 الإيرادات الذاتية",
                                               f"{float(row.get('إجمالي مبلغ الإيرادات الذاتية', 0) or 0):.2f}")
                 
-                # السنوي - يظهر في Q4
+                # السنوي
                 if sel_q == "الربع الرابع":
                     st.markdown("## 📊 البيانات السنوية")
                     df_a = load_sheet("البيانات_السنوية", ANNUAL_COLUMNS)
