@@ -224,7 +224,6 @@ def save_list(sheet_name, input_df, base_cols, institute, period_key, period_val
         for key in list(st.session_state.keys()):
             if key.startswith("_cd_") or key.startswith("_cb_"):
                 del st.session_state[key]
-        
         return True
     except Exception as e:
         st.error(f"خطأ في الحفظ: {e}")
@@ -235,46 +234,32 @@ def save_or_update_row(sheet_name, all_cols, data_dict, key_cols):
         ws = get_or_create_sheet(sheet_name, all_cols)
         if ws is None:
             return None
-        
         all_v = ws.get_all_values()
         if len(all_v) == 0:
-            new_data = [list(all_cols), [str(data_dict.get(c, "0")) for c in all_cols]]
-            result = "added"
-        else:
-            headers = all_v[0]
-            for c in all_cols:
-                if c not in headers:
-                    headers.append(c)
-            new_data = [headers]
-            found = False
-            expected_len = len(headers)
-            for row in all_v[1:]:
-                row_list = list(row) + [""] * (expected_len - len(row))
-                row_list = row_list[:expected_len]
-                is_match = True
-                for k in key_cols:
-                    if k in headers:
-                        idx = headers.index(k)
-                        if str(row_list[idx]) != str(data_dict.get(k, "")):
-                            is_match = False
-                            break
-                    else:
-                        is_match = False
-                        break
-                if is_match:
-                    new_data.append([str(data_dict.get(h, "0")) for h in headers])
-                    found = True
-                else:
-                    new_data.append(row_list)
-            if not found:
+            ws.append_rows([list(all_cols), [str(data_dict.get(c, "0")) for c in all_cols]], value_input_option="USER_ENTERED")
+            return "added"
+        headers = all_v[0]
+        for c in all_cols:
+            if c not in headers:
+                headers.append(c)
+        new_data = [headers]
+        found = False
+        for row in all_v[1:]:
+            row_list = (list(row) + [""] * len(headers))[:len(headers)]
+            is_match = all(
+                k in headers and str(row_list[headers.index(k)]) == str(data_dict.get(k, ""))
+                for k in key_cols
+            )
+            if is_match:
                 new_data.append([str(data_dict.get(h, "0")) for h in headers])
-                result = "added"
+                found = True
             else:
-                result = "updated"
-        
+                new_data.append(row_list)
+        if not found:
+            new_data.append([str(data_dict.get(h, "0")) for h in headers])
         ws.clear()
         ws.append_rows(new_data, value_input_option="USER_ENTERED")
-        return result
+        return "updated" if found else "added"
     except Exception as e:
         st.error(f"خطأ في الحفظ: {e}")
         return None
@@ -321,8 +306,7 @@ def _add_table(doc, headers, rows):
         p = cell.paragraphs[0]
         _rtl_run(p.add_run(str(h)), bold=True, size=10)
         _rtl_para(p)
-        shd = OxmlElement('w:shd')
-        shd.set(qn('w:fill'), 'D9D9D9')
+        shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'D9D9D9')
         cell._tc.get_or_add_tcPr().append(shd)
     serial_idx = headers.index("م")
     for idx, row_data in enumerate(rows, start=1):
@@ -343,46 +327,32 @@ def _add_table(doc, headers, rows):
             col += 1
 
 # ============================================================
-# ⭐ الثوابت الجديدة وفقاً للملف
+# ⭐ الثوابت وفقاً للملف
 # ============================================================
 MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
 
-# الدراسات الجارية
 T_RESEARCH = "خطة بحثية"
 T_CONSULT = "استشارية"
 T_SELF_FUNDED = "دراسات بتمويل ذاتي"
-
-# التقارير
 T_REP_PROGRESS = "تقرير مرحلي"
 T_REP_FINAL = "تقرير نهائي"
 T_REP_INSPECT = "تقرير معاينة"
 T_REP_CALIB = "تقرير معايرة"
 T_REP_OTHER = "أخرى"
-
-# المقترحات
 T_PROP_CONSULT = "استشارات"
 T_PROP_FUNDING = "تمويل أبحاث"
-
-# الأنشطة العلمية
 T_ACT_CONF = "مؤتمرات"
 T_ACT_WORKSHOP = "ورش عمل"
-
-# الاجتماعات
 T_MEET_MINISTRY = "بالوزارة"
 T_MEET_CENTER = "بالمركز"
-T_MEET_EXTERNAL = "جهات خارجية"
 T_MEET_STAFF = "مع العاملين"
+T_MEET_EXTERNAL = "جهات خارجية"
+T_MEET_ONLINE = "اجتماعات افتراضية Online"
 T_MEET_OTHER = "جهات أخرى"
-
-# الأوراق البحثية
 T_PAPER_PUBLISHED = "المنشورة"
 T_PAPER_ONGOING = "الجاري العمل عليها"
-
-# الرسائل العلمية
 T_THESIS_FINISHED = "المنتهية"
 T_THESIS_ONGOING = "الجاري العمل عليها"
-
-# التدريب
 T_TRAIN_IN = "داخل المعهد"
 T_TRAIN_OUT = "خارج المعهد"
 T_TRAIN_ONLINE = "Online"
@@ -390,35 +360,19 @@ T_TR_TYPE_COURSE = "دورة تدريبية"
 T_TR_TYPE_WS = "ورشة عمل"
 T_TR_TYPE_CONF = "مؤتمر"
 
-# ============================================================
-# ⭐ الأعمدة المحدثة
-# ============================================================
 KPI_COLUMNS = [
     "المعهد", "المستخدم", "الشهر", "السنة",
-    # الدراسات
     "خطة بحثية", "استشارية", "دراسات بتمويل ذاتي", "إجمالي الدراسات الجارية",
-    # التقارير
-    "تقرير مرحلي", "تقرير نهائي", "تقرير معاينة", "تقرير معايرة", "أخرى",
-    "إجمالي التقارير",
-    # المذكرات
+    "تقرير مرحلي", "تقرير نهائي", "تقرير معاينة", "تقرير معايرة", "أخرى", "إجمالي التقارير",
     "عدد المذكرات",
-    # المقترحات
     "استشارات", "تمويل أبحاث", "إجمالي المقترحات",
-    # المأموريات والمعاينات
     "إجمالي عدد المأموريات", "إجمالي عدد الأيام الفعلية", "إجمالي عدد المعاينات",
-    # التدريب
-    "متدربين", "مدربين",
-    "أيام تدريب داخل المعهد", "أيام تدريب خارج المعهد",
-    # الأنشطة العلمية
+    "متدربين", "مدربين", "أيام تدريب داخل المعهد", "أيام تدريب خارج المعهد",
     "مؤتمرات", "ورش عمل", "إجمالي المشاركين في أنشطة علمية",
-    # الاجتماعات
     "اجتماعات بالوزارة", "اجتماعات بالمركز", "اجتماعات جهات خارجية",
-    "اجتماعات مع العاملين", "اجتماعات جهات أخرى", "إجمالي الاجتماعات",
-    # الأوراق البحثية
+    "اجتماعات مع العاملين", "اجتماعات جهات أخرى", "اجتماعات افتراضية Online", "إجمالي الاجتماعات",
     "الأوراق المنشورة", "الأوراق الجاري العمل عليها", "إجمالي الأوراق البحثية",
-    # الرسائل
     "الرسائل المنتهية", "الرسائل الجاري العمل عليها", "إجمالي الرسائل",
-    # العاملون
     "إجمالي عدد العاملين الفعلي",
     "الأساتذة المتفرغين", "الأساتذة", "الأساتذة المساعدون",
     "الباحثون", "الباحث المساعد", "مساعد باحث",
@@ -443,22 +397,19 @@ HALF_COLUMNS = [
 
 ANNUAL_COLUMNS = ["المعهد", "المستخدم", "السنة المالية", "عدد براءات الاختراع"]
 
-# ============================================================
-# ⭐ أعمدة القوائم الشهرية
-# ============================================================
-LIST_STUDIES = ["م", "عنوان الدراسة", "النوع", "الجهة المستفيدة", "تاريخ البدء", "نسبة التنفيذ %", "ملاحظات"]
-LIST_REPORTS = ["م", "عنوان التقرير", "النوع", "تاريخ الإصدار", "الجهة المستفيدة", "ملخص"]
+# أعمدة القوائم
+LIST_STUDIES = ["م", "عنوان الدراسة", "النوع", "الجهة المستفيدة", "تاريخ اصدار التقرير", "ملخص التقرير"]
+LIST_REPORTS = ["م", "عنوان التقرير", "النوع", "تاريخ الاصدار", "الجهة المستفيدة", "عنوان الدراسة طبقاً للخطة البحثية", "ملخص"]
 LIST_MEMOS = ["م", "رقم المذكرة", "الموضوع", "التاريخ", "الجهة الموجه إليها"]
 LIST_PROPOSALS = ["م", "عنوان المقترح", "النوع", "الجهة التمويل", "موقف المقترح", "ملاحظات"]
 LIST_MISSIONS = ["م", "الموقع", "الغرض", "من تاريخ", "إلى تاريخ", "عدد الأيام", "الفريق", "هل معاينة؟"]
-LIST_INSPECTIONS = ["م", "الموقع", "الغرض", "التاريخ", "الفريق"]
-LIST_TRAINING = ["م", "عنوان البرنامج", "النوع", "المكان", "عدد المتدربين", "عدد المدربين", "عدد الأيام"]
+LIST_TRAINING = ["م", "عنوان البرنامج", "النوع", "المكان", "عدد المشاركين", "مدة البرنامج"]
 LIST_ACTIVITIES = ["م", "النشاط", "النوع", "عدد المشاركين", "المكان", "التاريخ"]
-LIST_MEETINGS = ["م", "التاريخ", "النوع", "الاسم", "الوظيفة", "المكان", "الغرض"]
+LIST_MEETINGS = ["م", "التاريخ", "النوع", "الاسم", "الوظيفة", "مكان انعقاد الاجتماع", "الغرض من الاجتماع"]
 LIST_PAPERS = ["م", "عنوان البحث", "المجلة", "النوع", "تاريخ النشر", "الباحث الرئيسي"]
 LIST_THESES = ["م", "عنوان الرسالة", "النوع", "الباحث", "الجامعة", "تاريخ المناقشة"]
+LIST_PERF_MEETINGS = ["م", "تاريخ الاجتماع", "عنوان الاجتماع", "الغرض من الاجتماع", "السادة الحضور"]
 
-# ⭐ القوائم المحدثة وفقاً للملف
 MONTHLY_LISTS = {
     "الدراسات_الجارية": {
         "title": "📚 الدراسات الجارية",
@@ -472,9 +423,7 @@ MONTHLY_LISTS = {
         "hint": f"النوع: {T_REP_PROGRESS} / {T_REP_FINAL} / {T_REP_INSPECT} / {T_REP_CALIB} / {T_REP_OTHER}",
         "dropdowns": {"النوع": [T_REP_PROGRESS, T_REP_FINAL, T_REP_INSPECT, T_REP_CALIB, T_REP_OTHER]},
     },
-    "المذكرات_الصادرة": {
-        "title": "📝 المذكرات الصادرة", "cols": LIST_MEMOS, "hint": "", "dropdowns": {},
-    },
+    "المذكرات_الصادرة": {"title": "📝 المذكرات الصادرة", "cols": LIST_MEMOS, "hint": "", "dropdowns": {}},
     "المقترحات": {
         "title": "📋 المقترحات الفنية والمالية",
         "cols": LIST_PROPOSALS,
@@ -482,7 +431,8 @@ MONTHLY_LISTS = {
         "dropdowns": {"النوع": [T_PROP_CONSULT, T_PROP_FUNDING]},
     },
     "المأموريات_الحقلية": {
-        "title": "🏃 المأموريات الحقلية والمعاينات", "cols": LIST_MISSIONS,
+        "title": "🏃 المأموريات الحقلية والمعاينات",
+        "cols": LIST_MISSIONS,
         "hint": "أدخل عدد الأيام لكل مأمورية. عمود (هل معاينة؟) يشير إلى نوع الزيارة",
         "dropdowns": {"هل معاينة؟": ["مأمورية", "معاينة"]},
     },
@@ -490,10 +440,8 @@ MONTHLY_LISTS = {
         "title": "👥 التدريب",
         "cols": LIST_TRAINING,
         "hint": f"النوع: {T_TR_TYPE_COURSE} / {T_TR_TYPE_WS} / {T_TR_TYPE_CONF} — المكان: {T_TRAIN_IN} / {T_TRAIN_OUT} / {T_TRAIN_ONLINE}",
-        "dropdowns": {
-            "النوع": [T_TR_TYPE_COURSE, T_TR_TYPE_WS, T_TR_TYPE_CONF],
-            "المكان": [T_TRAIN_IN, T_TRAIN_OUT, T_TRAIN_ONLINE],
-        },
+        "dropdowns": {"النوع": [T_TR_TYPE_COURSE, T_TR_TYPE_WS, T_TR_TYPE_CONF],
+                      "المكان": [T_TRAIN_IN, T_TRAIN_OUT, T_TRAIN_ONLINE]},
     },
     "الأنشطة_العلمية": {
         "title": "🔬 الأنشطة العلمية",
@@ -504,8 +452,8 @@ MONTHLY_LISTS = {
     "الاجتماعات": {
         "title": "🤝 الاجتماعات",
         "cols": LIST_MEETINGS,
-        "hint": f"النوع: {T_MEET_MINISTRY} / {T_MEET_CENTER} / {T_MEET_EXTERNAL} / {T_MEET_STAFF} / {T_MEET_OTHER}",
-        "dropdowns": {"النوع": [T_MEET_MINISTRY, T_MEET_CENTER, T_MEET_EXTERNAL, T_MEET_STAFF, T_MEET_OTHER]},
+        "hint": f"النوع: {T_MEET_MINISTRY} / {T_MEET_CENTER} / {T_MEET_STAFF} / {T_MEET_EXTERNAL} / {T_MEET_ONLINE} / {T_MEET_OTHER}",
+        "dropdowns": {"النوع": [T_MEET_MINISTRY, T_MEET_CENTER, T_MEET_STAFF, T_MEET_EXTERNAL, T_MEET_ONLINE, T_MEET_OTHER]},
     },
     "الأوراق_البحثية": {
         "title": "📝 الأوراق البحثية",
@@ -519,10 +467,16 @@ MONTHLY_LISTS = {
         "hint": f"النوع: {T_THESIS_FINISHED} / {T_THESIS_ONGOING}",
         "dropdowns": {"النوع": [T_THESIS_FINISHED, T_THESIS_ONGOING]},
     },
+    "اجتماعات_تحسين_الأداء": {
+        "title": "👥 اجتماعات تحسين الأداء",
+        "cols": LIST_PERF_MEETINGS,
+        "hint": "",
+        "dropdowns": {},
+    },
 }
 
 # ============================================================
-# منطق الفترة المالية
+# الفترة المالية
 # ============================================================
 def get_fiscal_period(month, year):
     result = {
@@ -551,7 +505,6 @@ def get_fiscal_period(month, year):
     else:
         month_idx = MONTHS.index(month) + 1
         result["fiscal_year"] = f"{year}/{year + 1}" if month_idx >= 7 else f"{year - 1}/{year}"
-    
     if month == "يناير":
         result["half"] = "النصف الأول"
     elif month == "يوليو":
@@ -559,7 +512,7 @@ def get_fiscal_period(month, year):
     return result
 
 # ============================================================
-# ⭐ حساب KPI - محدث وفقاً للأسماء الجديدة
+# حساب KPI
 # ============================================================
 def compute_kpi_from_lists(institute, month, year):
     period = f"{month} {year}"
@@ -569,8 +522,7 @@ def compute_kpi_from_lists(institute, month, year):
         save_key = f"_saved_{name}_{institute}_{period}"
         if save_key in st.session_state:
             df = st.session_state[save_key].copy()
-            df["المعهد"] = institute
-            df["الفترة"] = period
+            df["المعهد"] = institute; df["الفترة"] = period
             return df
         cols = MONTHLY_LISTS[name]["cols"] + ["المعهد", "الفترة"]
         df = load_sheet(name, cols)
@@ -581,7 +533,6 @@ def compute_kpi_from_lists(institute, month, year):
     def to_num(series):
         return pd.to_numeric(series, errors="coerce").fillna(0)
     
-    # 1. الدراسات
     s = get_list("الدراسات_الجارية")
     if not s.empty and "النوع" in s.columns:
         kpi["خطة بحثية"] = int((s["النوع"] == T_RESEARCH).sum())
@@ -589,7 +540,6 @@ def compute_kpi_from_lists(institute, month, year):
         kpi["دراسات بتمويل ذاتي"] = int((s["النوع"] == T_SELF_FUNDED).sum())
     kpi["إجمالي الدراسات الجارية"] = kpi["خطة بحثية"] + kpi["استشارية"] + kpi["دراسات بتمويل ذاتي"]
     
-    # 2. التقارير
     s = get_list("التقارير_الصادرة")
     if not s.empty and "النوع" in s.columns:
         kpi["تقرير مرحلي"] = int((s["النوع"] == T_REP_PROGRESS).sum())
@@ -597,21 +547,17 @@ def compute_kpi_from_lists(institute, month, year):
         kpi["تقرير معاينة"] = int((s["النوع"] == T_REP_INSPECT).sum())
         kpi["تقرير معايرة"] = int((s["النوع"] == T_REP_CALIB).sum())
         kpi["أخرى"] = int((s["النوع"] == T_REP_OTHER).sum())
-    kpi["إجمالي التقارير"] = (kpi["تقرير مرحلي"] + kpi["تقرير نهائي"] + 
-                              kpi["تقرير معاينة"] + kpi["تقرير معايرة"] + kpi["أخرى"])
+    kpi["إجمالي التقارير"] = (kpi["تقرير مرحلي"] + kpi["تقرير نهائي"] + kpi["تقرير معاينة"] + kpi["تقرير معايرة"] + kpi["أخرى"])
     
-    # 3. المذكرات
     s = get_list("المذكرات_الصادرة")
     kpi["عدد المذكرات"] = len(s) if not s.empty else 0
     
-    # 4. المقترحات
     s = get_list("المقترحات")
     if not s.empty and "النوع" in s.columns:
         kpi["استشارات"] = int((s["النوع"] == T_PROP_CONSULT).sum())
         kpi["تمويل أبحاث"] = int((s["النوع"] == T_PROP_FUNDING).sum())
     kpi["إجمالي المقترحات"] = kpi["استشارات"] + kpi["تمويل أبحاث"]
     
-    # 5. المأموريات والمعاينات
     s = get_list("المأموريات_الحقلية")
     if not s.empty:
         if "عدد الأيام" in s.columns:
@@ -619,22 +565,16 @@ def compute_kpi_from_lists(institute, month, year):
         if "هل معاينة؟" in s.columns:
             kpi["إجمالي عدد المأموريات"] = int((s["هل معاينة؟"] == "مأمورية").sum())
             kpi["إجمالي عدد المعاينات"] = int((s["هل معاينة؟"] == "معاينة").sum())
-        else:
-            kpi["إجمالي عدد المأموريات"] = len(s)
     
-    # 6. التدريب
     s = get_list("التدريب")
     if not s.empty:
-        if "عدد المتدربين" in s.columns:
-            kpi["متدربين"] = int(to_num(s["عدد المتدربين"]).sum())
-        if "عدد المدربين" in s.columns:
-            kpi["مدربين"] = int(to_num(s["عدد المدربين"]).sum())
-        if "عدد الأيام" in s.columns and "المكان" in s.columns:
-            days = to_num(s["عدد الأيام"])
+        if "عدد المشاركين" in s.columns:
+            kpi["متدربين"] = int(to_num(s["عدد المشاركين"]).sum())
+        if "المكان" in s.columns and "مدة البرنامج" in s.columns:
+            days = to_num(s["مدة البرنامج"])
             kpi["أيام تدريب داخل المعهد"] = int(days[s["المكان"] == T_TRAIN_IN].sum())
             kpi["أيام تدريب خارج المعهد"] = int(days[s["المكان"] == T_TRAIN_OUT].sum())
     
-    # 7. الأنشطة العلمية
     s = get_list("الأنشطة_العلمية")
     if not s.empty and "عدد المشاركين" in s.columns and "النوع" in s.columns:
         parts = to_num(s["عدد المشاركين"])
@@ -642,7 +582,6 @@ def compute_kpi_from_lists(institute, month, year):
         kpi["ورش عمل"] = int(parts[s["النوع"] == T_ACT_WORKSHOP].sum())
     kpi["إجمالي المشاركين في أنشطة علمية"] = kpi["مؤتمرات"] + kpi["ورش عمل"]
     
-    # 8. الاجتماعات
     s = get_list("الاجتماعات")
     if not s.empty and "النوع" in s.columns:
         kpi["اجتماعات بالوزارة"] = int((s["النوع"] == T_MEET_MINISTRY).sum())
@@ -650,28 +589,27 @@ def compute_kpi_from_lists(institute, month, year):
         kpi["اجتماعات جهات خارجية"] = int((s["النوع"] == T_MEET_EXTERNAL).sum())
         kpi["اجتماعات مع العاملين"] = int((s["النوع"] == T_MEET_STAFF).sum())
         kpi["اجتماعات جهات أخرى"] = int((s["النوع"] == T_MEET_OTHER).sum())
-    kpi["إجمالي الاجتماعات"] = (kpi["اجتماعات بالوزارة"] + kpi["اجتماعات بالمركز"] + 
-                                 kpi["اجتماعات جهات خارجية"] + kpi["اجتماعات مع العاملين"] + 
-                                 kpi["اجتماعات جهات أخرى"])
+        kpi["اجتماعات افتراضية Online"] = int((s["النوع"] == T_MEET_ONLINE).sum())
+    kpi["إجمالي الاجتماعات"] = sum([
+        kpi["اجتماعات بالوزارة"], kpi["اجتماعات بالمركز"], kpi["اجتماعات جهات خارجية"],
+        kpi["اجتماعات مع العاملين"], kpi["اجتماعات جهات أخرى"], kpi["اجتماعات افتراضية Online"],
+    ])
     
-    # 9. الأوراق البحثية
     s = get_list("الأوراق_البحثية")
     if not s.empty and "النوع" in s.columns:
         kpi["الأوراق المنشورة"] = int((s["النوع"] == T_PAPER_PUBLISHED).sum())
         kpi["الأوراق الجاري العمل عليها"] = int((s["النوع"] == T_PAPER_ONGOING).sum())
     kpi["إجمالي الأوراق البحثية"] = kpi["الأوراق المنشورة"] + kpi["الأوراق الجاري العمل عليها"]
     
-    # 10. الرسائل
     s = get_list("الرسائل_العلمية")
     if not s.empty and "النوع" in s.columns:
         kpi["الرسائل المنتهية"] = int((s["النوع"] == T_THESIS_FINISHED).sum())
         kpi["الرسائل الجاري العمل عليها"] = int((s["النوع"] == T_THESIS_ONGOING).sum())
     kpi["إجمالي الرسائل"] = kpi["الرسائل المنتهية"] + kpi["الرسائل الجاري العمل عليها"]
-    
     return kpi
 
 # ============================================================
-# توليد التقارير - محدث
+# ⭐ التقرير الشهري - وفقاً للهيكل المطلوب
 # ============================================================
 def generate_monthly_report(institute, month, year):
     doc = Document()
@@ -679,81 +617,199 @@ def generate_monthly_report(institute, month, year):
     section.page_width = Cm(21); section.page_height = Cm(29.7)
     section.left_margin = Cm(2); section.right_margin = Cm(2)
     
+    # الغلاف
     doc.add_paragraph(); doc.add_paragraph()
     _add_heading(doc, "تقرير الإنجازات الشهري", size=26)
     _add_heading(doc, f"{institute}", size=20)
     _add_heading(doc, f"({month} {year})", size=18)
     doc.add_page_break()
     
+    # المحتويات
     _add_heading(doc, "المحتويات", size=20)
-    for i, c in enumerate(["الدراسات البحثية", "التقارير الفنية", "الاجتماعات",
-                            "التدريب والندوات", "اجتماعات تحسين الأداء"], 1):
+    for i, c in enumerate([
+        "الدراسات البحثية التي تمت خلال الشهر",
+        "التقارير الفنية التي تم دراستها",
+        "الاجتماعات",
+        "الدورات التدريبية / ورش العمل / الندوات / المؤتمرات",
+        "اجتماعات تحسين الأداء وتعزيز الروح الجماعية",
+    ], 1):
         _add_para(doc, f"{i}. {c}", size=13)
     doc.add_page_break()
     
     period = f"{month} {year}"
+    kpi = compute_kpi_from_lists(institute, month, year)
+    
+    # ⭐ ملخص الأرقام (المذكرات والمقترحات كأرقام)
+    _add_heading(doc, "ملخص الإنجازات الشهرية", size=16)
+    summary_items = [
+        ("إجمالي الدراسات الجارية", kpi["إجمالي الدراسات الجارية"]),
+        ("إجمالي التقارير الصادرة", kpi["إجمالي التقارير"]),
+        ("عدد المذكرات الصادرة", kpi["عدد المذكرات"]),
+        ("إجمالي المقترحات الفنية والمالية", kpi["إجمالي المقترحات"]),
+        ("إجمالي عدد المأموريات الحقلية", kpi["إجمالي عدد المأموريات"]),
+        ("إجمالي عدد أيام المأموريات", kpi["إجمالي عدد الأيام الفعلية"]),
+        ("إجمالي عدد المعاينات", kpi["إجمالي عدد المعاينات"]),
+        ("عدد المتدربين", kpi["متدربين"]),
+        ("إجمالي المشاركين في أنشطة علمية", kpi["إجمالي المشاركين في أنشطة علمية"]),
+        ("إجمالي الاجتماعات", kpi["إجمالي الاجتماعات"]),
+        ("إجمالي الأوراق البحثية", kpi["إجمالي الأوراق البحثية"]),
+        ("إجمالي الرسائل العلمية", kpi["إجمالي الرسائل"]),
+    ]
+    rows = [[label, str(val)] for label, val in summary_items]
+    _add_table(doc, ["البند", "العدد"], rows)
+    doc.add_page_break()
+    
+    # ⭐ القسم 1: الدراسات البحثية (3 جداول)
+    _add_heading(doc, f"الدراسات البحثية التي تمت خلال شهر {month} {year}", size=18)
+    
     df_studies = load_sheet("الدراسات_الجارية", LIST_STUDIES + ["المعهد", "الفترة"])
     df_filtered = pd.DataFrame()
     if not df_studies.empty:
         df_filtered = df_studies[(df_studies["المعهد"] == institute) & (df_studies["الفترة"] == period)]
     
-    _add_heading(doc, f"الدراسات البحثية - {month} {year}", size=18)
-    for label, tval in [("دراسات الخطة البحثية", T_RESEARCH),
-                         ("مشروعات بحثية ممولة", T_SELF_FUNDED),
-                         ("استشارات بحثية ممولة", T_CONSULT)]:
-        _add_heading(doc, label, size=14)
-        rows = []
-        if not df_filtered.empty and "النوع" in df_filtered.columns:
-            r = df_filtered[df_filtered["النوع"] == tval]
-            rows = [[row.get("عنوان الدراسة",""), row.get("الجهة المستفيدة",""),
-                     row.get("تاريخ البدء",""), row.get("ملاحظات","")] for _, row in r.iterrows()]
-        _add_table(doc, ["عنوان الدراسة", "الجهة المستفيدة", "تاريخ الإصدار", "ملخص التقرير"], rows)
+    # 1-1 دراسات الخطة البحثية
+    _add_heading(doc, "دراسات الخطة البحثية", size=14)
+    rows = []
+    if not df_filtered.empty and "النوع" in df_filtered.columns:
+        for _, row in df_filtered[df_filtered["النوع"] == T_RESEARCH].iterrows():
+            rows.append([row.get("عنوان الدراسة",""), row.get("الجهة المستفيدة",""),
+                        row.get("تاريخ اصدار التقرير",""), row.get("ملخص التقرير","")])
+    _add_table(doc, ["عنوان الدراسة", "الجهة المستفيدة", "تاريخ اصدار التقرير", "ملخص التقرير"], rows)
     
+    # 1-2 مشروعات بحثية ممولة
+    _add_heading(doc, "مشروعات بحثية ممولة", size=14)
+    rows = []
+    if not df_filtered.empty and "النوع" in df_filtered.columns:
+        for _, row in df_filtered[df_filtered["النوع"] == T_SELF_FUNDED].iterrows():
+            rows.append([row.get("عنوان الدراسة",""), row.get("الجهة المستفيدة",""),
+                        row.get("تاريخ اصدار التقرير",""), row.get("ملخص التقرير","")])
+    _add_table(doc, ["عنوان الدراسة", "الجهة المستفيدة", "تاريخ اصدار التقرير", "ملخص التقرير"], rows)
+    
+    # 1-3 استشارات بحثية ممولة
+    _add_heading(doc, "استشارات بحثية ممولة", size=14)
+    rows = []
+    if not df_filtered.empty and "النوع" in df_filtered.columns:
+        for _, row in df_filtered[df_filtered["النوع"] == T_CONSULT].iterrows():
+            rows.append([row.get("عنوان الدراسة",""), row.get("الجهة المستفيدة",""),
+                        row.get("تاريخ اصدار التقرير",""), row.get("ملخص التقرير","")])
+    _add_table(doc, ["عنوان الدراسة", "الجهة المستفيدة", "تاريخ اصدار التقرير", "ملخص التقرير"], rows)
     doc.add_page_break()
-    _add_heading(doc, "التقارير الفنية", size=18)
+    
+    # ⭐ القسم 2: التقارير الفنية
+    _add_heading(doc, "التقارير الفنية التي تم دراستها", size=18)
+    _add_para(doc, "يعرض هذا الجزء تحليل التقارير الفنية التي تم دراستها خلال الفترة المحددة، مع بيان نوعية الدراسات والأطراف المستفيدة وملخص النتائج.")
     df_reports = load_sheet("التقارير_الصادرة", LIST_REPORTS + ["المعهد", "الفترة"])
     rows = []
     if not df_reports.empty:
         r = df_reports[(df_reports["المعهد"] == institute) & (df_reports["الفترة"] == period)]
-        rows = [[row.get("عنوان التقرير",""), row.get("تاريخ الإصدار",""),
-                 row.get("الجهة المستفيدة",""), "", row.get("ملخص","")] for _, row in r.iterrows()]
-    _add_table(doc, ["عنوان التقرير", "تاريخ الإصدار", "الجهة المستفيدة", "الدائرة", "ملخص"], rows)
-    
+        for _, row in r.iterrows():
+            rows.append([
+                row.get("عنوان التقرير",""),
+                row.get("تاريخ الاصدار",""),
+                row.get("الجهة المستفيدة",""),
+                row.get("عنوان الدراسة طبقاً للخطة البحثية",""),
+                row.get("ملخص",""),
+            ])
+    _add_table(doc, ["عنوان التقرير", "تاريخ الاصدار", "الجهة المستفيدة",
+                     "عنوان الدراسة طبقاً للخطة البحثية", "ملخص"], rows)
     doc.add_page_break()
+    
+    # ⭐ القسم 3: الاجتماعات (5 جداول فرعية)
     _add_heading(doc, "الاجتماعات", size=18)
+    _add_para(doc, "يسلط هذا الجزء الضوء على الاجتماعات الرئيسية التي عُقدت خلال الفترة المذكورة، على مستوى الوزارة أو المركز أو المعهد.")
+    
     df_meetings = load_sheet("الاجتماعات", LIST_MEETINGS + ["المعهد", "الفترة"])
     df_meet = pd.DataFrame()
     if not df_meetings.empty:
         df_meet = df_meetings[(df_meetings["المعهد"] == institute) & (df_meetings["الفترة"] == period)]
     
-    for title, tval in [("أولاً: الاجتماعات بالوزارة", T_MEET_MINISTRY),
-                        ("ثانياً: اجتماعات المركز", T_MEET_CENTER),
-                        ("ثالثاً: الاجتماعات بمقر المعهد", T_MEET_STAFF),
-                        ("رابعاً: اجتماعات بجهات أخرى", T_MEET_EXTERNAL)]:
-        _add_heading(doc, title, size=14)
-        rows = [[row.get("التاريخ",""), row.get("الاسم",""), row.get("الوظيفة",""),
-                 row.get("المكان",""), row.get("الغرض","")] for _, row in df_meet[df_meet["النوع"] == tval].iterrows()] if not df_meet.empty else []
-        _add_table(doc, ["التاريخ", "الاسم", "الوظيفة", "مكان الانعقاد", "الغرض"], rows)
+    # 3-1 اجتماعات بالوزارة
+    _add_heading(doc, "أولاً: الاجتماعات بالوزارة", size=14)
+    rows = []
+    if not df_meet.empty and "النوع" in df_meet.columns:
+        for _, row in df_meet[df_meet["النوع"] == T_MEET_MINISTRY].iterrows():
+            rows.append([row.get("التاريخ",""), row.get("الاسم",""), row.get("الوظيفة",""),
+                        row.get("مكان انعقاد الاجتماع",""), row.get("الغرض من الاجتماع","")])
+    _add_table(doc, ["التاريخ", "الاسم", "الوظيفة", "مكان انعقاد الاجتماع", "الغرض من الاجتماع"], rows)
     
+    # 3-2 اجتماعات المركز
+    _add_heading(doc, "ثانياً: اجتماعات ديوان عام المركز والندوات المنعقدة من خلال المركز", size=14)
+    rows = []
+    if not df_meet.empty and "النوع" in df_meet.columns:
+        for _, row in df_meet[df_meet["النوع"] == T_MEET_CENTER].iterrows():
+            rows.append([row.get("التاريخ",""), row.get("الاسم",""), row.get("الوظيفة",""),
+                        row.get("مكان انعقاد الاجتماع",""), row.get("الغرض من الاجتماع","")])
+    _add_table(doc, ["التاريخ", "الاسم", "الوظيفة", "مكان انعقاد الاجتماع/الندوة", "الغرض من الاجتماع/الندوة"], rows)
+    
+    # 3-3 اجتماعات بمقر المعهد
+    _add_heading(doc, "ثالثاً: الاجتماعات التي تمت بمقر المعهد", size=14)
+    rows = []
+    if not df_meet.empty and "النوع" in df_meet.columns:
+        for _, row in df_meet[df_meet["النوع"] == T_MEET_STAFF].iterrows():
+            rows.append([row.get("التاريخ",""), row.get("الغرض من الاجتماع","")])
+    _add_table(doc, ["التاريخ", "الغرض من الاجتماع"], rows)
+    
+    # 3-4 اجتماعات بجهات أخرى
+    _add_heading(doc, "رابعاً: اجتماعات بجهات أخرى", size=14)
+    rows = []
+    if not df_meet.empty and "النوع" in df_meet.columns:
+        for _, row in df_meet[df_meet["النوع"] == T_MEET_EXTERNAL].iterrows():
+            rows.append([row.get("التاريخ",""), row.get("الاسم",""),
+                        row.get("مكان انعقاد الاجتماع",""), row.get("الغرض من الاجتماع","")])
+    _add_table(doc, ["التاريخ", "ممثل المعهد", "مكان انعقاد الاجتماع", "الغرض من الاجتماع"], rows)
+    
+    # ⭐ 3-5 اجتماعات افتراضية Online (جديد)
+    _add_heading(doc, "خامساً: اجتماعات افتراضية Online", size=14)
+    rows = []
+    if not df_meet.empty and "النوع" in df_meet.columns:
+        for _, row in df_meet[df_meet["النوع"] == T_MEET_ONLINE].iterrows():
+            rows.append([row.get("التاريخ",""), row.get("الاسم",""),
+                        row.get("مكان انعقاد الاجتماع",""), row.get("الغرض من الاجتماع","")])
+    _add_table(doc, ["التاريخ", "ممثل المعهد", "جهة الاجتماع", "الغرض من الاجتماع"], rows)
     doc.add_page_break()
-    _add_heading(doc, "الدورات التدريبية / ورش العمل / المؤتمرات", size=18)
+    
+    # ⭐ القسم 4: التدريب
+    _add_heading(doc, "الدورات التدريبية / ورش العمل / الندوات / المؤتمرات", size=18)
+    _add_para(doc, "يعرض هذا الجزء البرامج التدريبية وورش العمل والندوات التي نُظمت خلال الفترة، مع ذكر عدد المشاركين وأماكن الانعقاد.")
     df_training = load_sheet("التدريب", LIST_TRAINING + ["المعهد", "الفترة"])
     rows = []
     if not df_training.empty:
         r = df_training[(df_training["المعهد"] == institute) & (df_training["الفترة"] == period)]
-        rows = [[row.get("عنوان البرنامج",""), row.get("المكان",""),
-                 row.get("عدد المتدربين",""), row.get("عدد الأيام","")] for _, row in r.iterrows()]
-    _add_table(doc, ["عنوان البرنامج", "مكان الانعقاد", "عدد المشاركين", "مدة البرنامج"], rows)
-    
+        for _, row in r.iterrows():
+            rows.append([
+                row.get("عنوان البرنامج",""),
+                row.get("عدد المشاركين",""),
+                row.get("المكان",""),
+                row.get("مدة البرنامج",""),
+            ])
+    _add_table(doc, ["عنوان البرنامج التدريبي/ ورشة عمل / الندوات",
+                     "عدد المشاركين", "مكان الانعقاد", "مدة البرنامج"], rows)
     doc.add_page_break()
-    _add_heading(doc, "اجتماعات تحسين الأداء", size=18)
-    _add_table(doc, ["التاريخ", "عنوان الاجتماع", "الغرض", "الحضور"], [])
+    
+    # ⭐ القسم 5: اجتماعات تحسين الأداء
+    _add_heading(doc, "اجتماعات تحسين الأداء وتعزيز الروح الجماعية في المعهد", size=18)
+    _add_para(doc, "يعرض هذا القسم المبادرات والاجتماعات التي تهدف إلى تحسين الأداء وتعزيز الروح الجماعية بين أعضاء المعهد.")
+    df_perf = load_sheet("اجتماعات_تحسين_الأداء", LIST_PERF_MEETINGS + ["المعهد", "الفترة"])
+    rows = []
+    if not df_perf.empty:
+        r = df_perf[(df_perf["المعهد"] == institute) & (df_perf["الفترة"] == period)]
+        for _, row in r.iterrows():
+            rows.append([
+                row.get("تاريخ الاجتماع",""),
+                row.get("عنوان الاجتماع",""),
+                row.get("الغرض من الاجتماع",""),
+                row.get("السادة الحضور",""),
+            ])
+    _add_table(doc, ["تاريخ الاجتماع", "عنوان الاجتماع", "الغرض من الاجتماع", "السادة الحضور"], rows)
     
     output = BytesIO()
     doc.save(output)
     output.seek(0)
     return output.getvalue()
 
+# ============================================================
+# التقرير الربع سنوي
+# ============================================================
 def generate_quarterly_report(institute, quarter, fiscal_year):
     doc = Document()
     section = doc.sections[0]
@@ -796,14 +852,16 @@ def generate_quarterly_report(institute, quarter, fiscal_year):
     if not df_studies.empty:
         period_list = [f"{m} {y}" for m, y in q_months]
         r = df_studies[(df_studies["المعهد"] == institute) & (df_studies["الفترة"].isin(period_list)) & (df_studies["النوع"] == T_RESEARCH)]
-        rows = [[row.get("عنوان الدراسة",""), row.get("نسبة التنفيذ %",""), "", "", row.get("ملاحظات","")] for _, row in r.iterrows()]
+        for _, row in r.iterrows():
+            rows.append([row.get("عنوان الدراسة",""), "", "", "",
+                         row.get("ملخص التقرير","")])
     _add_table(doc, ["عنوان المشروع", "نسبة المنفذ %", "عدد التقارير", "هدف الدراسة", "النتائج"], rows)
     
     _add_heading(doc, "1-1-2 مشروع مشترك مع معاهد أخرى", size=13)
     _add_table(doc, ["عنوان المشروع", "نسبة المنفذ %", "نسبة المشاركة", "عدد التقارير", "الهدف", "النتائج"], [])
     doc.add_page_break()
     
-    _add_heading(doc, "2. الاستشارات والدراسات خارج الخطة", size=16)
+    _add_heading(doc, "2. الاستشارات والدراسات خارج الخطة البحثية", size=16)
     consult_count = int(agg.get("استشارية", 0)) if not agg.empty else 0
     self_funded = int(agg.get("دراسات بتمويل ذاتي", 0)) if not agg.empty else 0
     rows = [
@@ -820,9 +878,9 @@ def generate_quarterly_report(institute, quarter, fiscal_year):
     props_consult = int(agg.get("استشارات", 0)) if not agg.empty else 0
     props_funding = int(agg.get("تمويل أبحاث", 0)) if not agg.empty else 0
     rows = [
-        ["عدد المقترحات المقدمة محلياً", props_consult],
-        ["عدد المقترحات المقدمة دولياً", 0],
-        ["عدد المقترحات المقدمة للوزارة", props_funding],
+        ["عدد المقترحات محلياً", props_consult],
+        ["عدد المقترحات دولياً", 0],
+        ["عدد المقترحات للوزارة", props_funding],
         ["عدد المقترحات لجهات خارج الوزارة", 0],
         ["الإجمالي", props_consult + props_funding],
     ]
@@ -830,7 +888,7 @@ def generate_quarterly_report(institute, quarter, fiscal_year):
     doc.add_page_break()
     
     _add_heading(doc, "3. التعاون الداخلي والخارجي", size=16)
-    _add_heading(doc, "3-1 التعاون الداخلي مع المعاهد", size=13)
+    _add_heading(doc, "3-1 التعاون الداخلي مع المعاهد البحثية", size=13)
     _add_table(doc, ["اسم الدراسة/المشروع", "المعهد", "تاريخ بدء التعاون"], [])
     _add_heading(doc, "3-2 التعاون الداخلي خارج المعاهد", size=13)
     _add_table(doc, ["اسم الدراسة/المشروع", "الجهة", "تاريخ بدء التعاون"], [])
@@ -838,7 +896,7 @@ def generate_quarterly_report(institute, quarter, fiscal_year):
     _add_table(doc, ["اسم الدراسة/المشروع", "الجهة", "تاريخ بدء التعاون"], [])
     doc.add_page_break()
     
-    _add_heading(doc, "4. الإنتاج العلمي والنشر", size=16)
+    _add_heading(doc, "4. الإنتاج العلمي والنشر والابتكار", size=16)
     papers_pub = int(agg.get("الأوراق المنشورة", 0)) if not agg.empty else 0
     theses_fin = int(agg.get("الرسائل المنتهية", 0)) if not agg.empty else 0
     rows = [
@@ -867,7 +925,7 @@ def generate_quarterly_report(institute, quarter, fiscal_year):
                 training_data[key] = {"count": 0, "trainees": 0}
             training_data[key]["count"] += 1
             try:
-                training_data[key]["trainees"] += int(float(row.get("عدد المتدربين", 0) or 0))
+                training_data[key]["trainees"] += int(float(row.get("عدد المشاركين", 0) or 0))
             except:
                 pass
     
@@ -883,7 +941,9 @@ def generate_quarterly_report(institute, quarter, fiscal_year):
     ]:
         d = training_data.get((ntype, place), {"count": 0, "trainees": 0})
         rows.append([label, d["count"], d["trainees"]])
-    rows.append(["الإجمالي", sum(r[1] for r in rows), sum(r[2] for r in rows)])
+    total_count = sum(r[1] for r in rows)
+    total_trainees = sum(r[2] for r in rows)
+    rows.append(["الإجمالي", total_count, total_trainees])
     _add_table(doc, ["الدورة/ورشة العمل", "عدد الدورات", "عدد المتدربين"], rows)
     doc.add_page_break()
     
@@ -895,7 +955,6 @@ def generate_quarterly_report(institute, quarter, fiscal_year):
         if not r.empty:
             try: budget = float(r.iloc[0].get("المبلغ المنصرف من الموازنة الاستثمارية", 0) or 0)
             except: pass
-    
     rows = [
         ["تمويل الخطة البحثية", "0", "0%"],
         ["التمويل الخارجي", "0", "0%"],
@@ -931,14 +990,19 @@ def generate_quarterly_report(institute, quarter, fiscal_year):
     if not df_meetings.empty:
         period_list = [f"{m} {y}" for m, y in q_months]
         r_meet = df_meetings[(df_meetings["المعهد"] == institute) & (df_meetings["الفترة"].isin(period_list)) & (df_meetings["النوع"] == T_MEET_MINISTRY)]
-        rows = [[row.get("التاريخ",""), row.get("الاسم",""), row.get("الوظيفة",""), row.get("المكان",""), row.get("الغرض","")] for _, row in r_meet.iterrows()]
-    _add_table(doc, ["التاريخ", "الاسم", "الوظيفة", "مكان الانعقاد", "الغرض"], rows)
+        for _, row in r_meet.iterrows():
+            rows.append([row.get("التاريخ",""), row.get("الاسم",""), row.get("الوظيفة",""),
+                        row.get("مكان انعقاد الاجتماع",""), row.get("الغرض من الاجتماع","")])
+    _add_table(doc, ["التاريخ", "الاسم", "الوظيفة", "مكان انعقاد الاجتماع", "الغرض"], rows)
     
     output = BytesIO()
     doc.save(output)
     output.seek(0)
     return output.getvalue()
 
+# ============================================================
+# التقرير السنوي (Excel)
+# ============================================================
 def generate_annual_report_excel(institute, fiscal_year):
     wb = Workbook()
     ws = wb.active
@@ -948,24 +1012,20 @@ def generate_annual_report_excel(institute, fiscal_year):
     header_font = Font(name='Arial', size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     data_font = Font(name='Arial', size=10)
-    data_alignment = Alignment(horizontal='right', vertical='center', wrap_text=True)
-    center_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    border = Border(left=Side(style='thin'), right=Side(style='thin'),
-                    top=Side(style='thin'), bottom=Side(style='thin'))
+    data_align = Alignment(horizontal='right', vertical='center', wrap_text=True)
+    center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
     fy_start = int(fiscal_year.split("/")[0])
     fy_end = int(fiscal_year.split("/")[1])
-    
     kpi_df = load_sheet("KPI_Data", KPI_COLUMNS)
     year_df = pd.DataFrame()
     if not kpi_df.empty:
         kpi_f = kpi_df[kpi_df["المعهد"] == institute]
-        fy_months = [
-            ("يوليو", fy_start), ("أغسطس", fy_start), ("سبتمبر", fy_start),
-            ("أكتوبر", fy_start), ("نوفمبر", fy_start), ("ديسمبر", fy_start),
-            ("يناير", fy_end), ("فبراير", fy_end), ("مارس", fy_end),
-            ("أبريل", fy_end), ("مايو", fy_end), ("يونيو", fy_end),
-        ]
+        fy_months = [("يوليو", fy_start), ("أغسطس", fy_start), ("سبتمبر", fy_start),
+                     ("أكتوبر", fy_start), ("نوفمبر", fy_start), ("ديسمبر", fy_start),
+                     ("يناير", fy_end), ("فبراير", fy_end), ("مارس", fy_end),
+                     ("أبريل", fy_end), ("مايو", fy_end), ("يونيو", fy_end)]
         mask = pd.Series([False]*len(kpi_f), index=kpi_f.index)
         for m, y in fy_months:
             mask |= ((kpi_f["الشهر"] == m) & (kpi_f["السنة"] == str(y)))
@@ -978,58 +1038,48 @@ def generate_annual_report_excel(institute, fiscal_year):
     ws.merge_cells('A1:B1')
     ws['A1'] = f"تقرير مؤشرات الأداء السنوي - {institute}"
     ws['A1'].font = Font(name='Arial', size=16, bold=True)
-    ws['A1'].alignment = center_alignment
+    ws['A1'].alignment = center_align
     ws.merge_cells('A2:B2')
     ws['A2'] = f"السنة المالية {fiscal_year}"
     ws['A2'].font = Font(name='Arial', size=13, bold=True)
-    ws['A2'].alignment = center_alignment
+    ws['A2'].alignment = center_align
     
     row = 4
-    ws.cell(row=row, column=1, value="المؤشر").font = header_font
-    ws.cell(row=row, column=1).fill = header_fill
-    ws.cell(row=row, column=1).alignment = center_alignment
-    ws.cell(row=row, column=1).border = border
-    ws.cell(row=row, column=2, value="القيمة").font = header_font
-    ws.cell(row=row, column=2).fill = header_fill
-    ws.cell(row=row, column=2).alignment = center_alignment
-    ws.cell(row=row, column=2).border = border
+    for col, lbl in [(1, "المؤشر"), (2, "القيمة")]:
+        ws.cell(row=row, column=col, value=lbl).font = header_font
+        ws.cell(row=row, column=col).fill = header_fill
+        ws.cell(row=row, column=col).alignment = center_align
+        ws.cell(row=row, column=col).border = border
     row += 1
     
-    summary_items = [
-        ("إجمالي الدراسات", int(agg.get("إجمالي الدراسات الجارية", 0)) if not agg.empty else 0),
+    items = [
+        ("إجمالي الدراسات الجارية", int(agg.get("إجمالي الدراسات الجارية", 0)) if not agg.empty else 0),
         ("خطة بحثية", int(agg.get("خطة بحثية", 0)) if not agg.empty else 0),
         ("استشارية", int(agg.get("استشارية", 0)) if not agg.empty else 0),
         ("دراسات بتمويل ذاتي", int(agg.get("دراسات بتمويل ذاتي", 0)) if not agg.empty else 0),
         ("إجمالي التقارير", int(agg.get("إجمالي التقارير", 0)) if not agg.empty else 0),
-        ("تقرير مرحلي", int(agg.get("تقرير مرحلي", 0)) if not agg.empty else 0),
-        ("تقرير نهائي", int(agg.get("تقرير نهائي", 0)) if not agg.empty else 0),
-        ("تقرير معاينة", int(agg.get("تقرير معاينة", 0)) if not agg.empty else 0),
-        ("تقرير معايرة", int(agg.get("تقرير معايرة", 0)) if not agg.empty else 0),
         ("عدد المذكرات", int(agg.get("عدد المذكرات", 0)) if not agg.empty else 0),
         ("إجمالي المقترحات", int(agg.get("إجمالي المقترحات", 0)) if not agg.empty else 0),
         ("إجمالي المأموريات", int(agg.get("إجمالي عدد المأموريات", 0)) if not agg.empty else 0),
         ("إجمالي أيام المأموريات", int(agg.get("إجمالي عدد الأيام الفعلية", 0)) if not agg.empty else 0),
         ("إجمالي المعاينات", int(agg.get("إجمالي عدد المعاينات", 0)) if not agg.empty else 0),
         ("متدربين", int(agg.get("متدربين", 0)) if not agg.empty else 0),
-        ("مدربين", int(agg.get("مدربين", 0)) if not agg.empty else 0),
         ("إجمالي المشاركين في أنشطة", int(agg.get("إجمالي المشاركين في أنشطة علمية", 0)) if not agg.empty else 0),
         ("إجمالي الاجتماعات", int(agg.get("إجمالي الاجتماعات", 0)) if not agg.empty else 0),
         ("إجمالي الأوراق", int(agg.get("إجمالي الأوراق البحثية", 0)) if not agg.empty else 0),
         ("إجمالي الرسائل", int(agg.get("إجمالي الرسائل", 0)) if not agg.empty else 0),
     ]
-    
-    for label, val in summary_items:
+    for label, val in items:
         ws.cell(row=row, column=1, value=label).font = data_font
-        ws.cell(row=row, column=1).alignment = data_alignment
+        ws.cell(row=row, column=1).alignment = data_align
         ws.cell(row=row, column=1).border = border
         ws.cell(row=row, column=2, value=val).font = data_font
-        ws.cell(row=row, column=2).alignment = center_alignment
+        ws.cell(row=row, column=2).alignment = center_align
         ws.cell(row=row, column=2).border = border
         row += 1
     
     ws.column_dimensions['A'].width = 45
     ws.column_dimensions['B'].width = 20
-    
     output = BytesIO()
     wb.save(output)
     output.seek(0)
@@ -1080,31 +1130,27 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ============================================================
-# بعد تسجيل الدخول
+# بعد الدخول
 # ============================================================
 c_head = st.columns([5, 1, 1])
 with c_head[0]:
     st.success(f"👤 مرحباً **{st.session_state.username}** — 🏢 {st.session_state.institute}")
 with c_head[1]:
     if st.button("🔄 تحديث"):
-        reset_all()
-        st.rerun()
+        reset_all(); st.rerun()
 with c_head[2]:
     if st.button("🚪 خروج"):
         st.session_state.clear()
-        st.cache_data.clear()
-        st.cache_resource.clear()
+        st.cache_data.clear(); st.cache_resource.clear()
         st.rerun()
 
 if st.session_state.role == "admin":
     tab_dash, tab_q_dash, tab_annual, tab_data, tab_debug = st.tabs([
-        "📊 Dashboard الشهري", "📈 التقرير الربع سنوي", "📅 التقرير السنوي", "📄 البيانات", "🔧 تشخيص"
-    ])
+        "📊 Dashboard الشهري", "📈 التقرير الربع سنوي", "📅 التقرير السنوي", "📄 البيانات", "🔧 تشخيص"])
     tab_input = None
 else:
     tab_input, tab_dash, tab_q_dash, tab_annual, tab_data = st.tabs([
-        "📥 إدخال البيانات", "📊 Dashboard الشهري", "📈 التقرير الربع سنوي", "📅 التقرير السنوي", "📄 البيانات"
-    ])
+        "📥 إدخال البيانات", "📊 Dashboard الشهري", "📈 التقرير الربع سنوي", "📅 التقرير السنوي", "📄 البيانات"])
     tab_debug = None
 
 # ============================================================
@@ -1113,7 +1159,6 @@ else:
 if tab_input is not None:
     with tab_input:
         st.header("📥 إدخال البيانات")
-        
         c1, c2 = st.columns(2)
         with c1:
             month = st.selectbox("الشهر", MONTHS, key="m_month")
@@ -1175,13 +1220,11 @@ if tab_input is not None:
                 column_config = {}
                 for col_name, options in cfg.get("dropdowns", {}).items():
                     column_config[col_name] = st.column_config.SelectboxColumn(
-                        col_name, options=options, required=False, help=f"اختر من: {' / '.join(options)}"
-                    )
+                        col_name, options=options, required=False, help=f"اختر من: {' / '.join(options)}")
                 
                 input_rtl = st.data_editor(
                     display_df, num_rows="dynamic", use_container_width=True,
-                    key=editor_key, hide_index=True, column_config=column_config
-                )
+                    key=editor_key, hide_index=True, column_config=column_config)
                 
                 if not input_rtl.empty:
                     input_df = input_rtl.reindex(columns=cfg["cols"]).fillna("")
@@ -1217,7 +1260,6 @@ if tab_input is not None:
                 except: return default
             
             kp = f"{fp['quarter']}_{fp['fiscal_year']}".replace("/", "_").replace(" ", "_")
-            
             c1, c2, c3, c4 = st.columns(4)
             q_res = c1.number_input("عدد الباحثين", min_value=0, value=qv("عدد الباحثين"), key=f"q_res_{kp}")
             q_prof = c2.number_input("عدد الأساتذة بدون المتفرغين", min_value=0, value=qv("عدد الأساتذة بدون المتفرغين"), key=f"q_prof_{kp}")
@@ -1229,27 +1271,23 @@ if tab_input is not None:
             q_periodic = c2.number_input("عدد الاجتماعات الدورية", min_value=0, value=qv("عدد الاجتماعات الدورية"), key=f"q_pm_{kp}")
             q_board = c3.number_input("عدد اجتماعات مجلس الإدارة", min_value=0, value=qv("عدد اجتماعات مجلس الإدارة"), key=f"q_bm_{kp}")
             q_think = c4.number_input("عدد اجتماعات وحدة الفكر", min_value=0, value=qv("عدد اجتماعات وحدة الفكر"), key=f"q_tk_{kp}")
-            
             q_notes = st.text_area("ملاحظات", value=str(existing["ملاحظات"]) if existing is not None and "ملاحظات" in existing.index else "", key=f"q_nt_{kp}")
             
             if st.button("💾 حفظ البيانات الربع سنوية", type="primary", key="save_q"):
-                q_data = {
-                    "المعهد": st.session_state.institute, "المستخدم": st.session_state.username,
-                    "الربع": fp["quarter"], "السنة المالية": fp["fiscal_year"],
-                    "عدد الباحثين": q_res, "عدد الأساتذة بدون المتفرغين": q_prof,
-                    "عدد المهندسين": q_eng, "إجمالي عدد العاملين": q_total,
-                    "المبلغ المنصرف من الموازنة الاستثمارية": q_budget,
-                    "عدد الاجتماعات الدورية": q_periodic, "عدد اجتماعات مجلس الإدارة": q_board,
-                    "عدد اجتماعات وحدة الفكر": q_think, "ملاحظات": q_notes,
-                }
+                q_data = {"المعهد": st.session_state.institute, "المستخدم": st.session_state.username,
+                          "الربع": fp["quarter"], "السنة المالية": fp["fiscal_year"],
+                          "عدد الباحثين": q_res, "عدد الأساتذة بدون المتفرغين": q_prof,
+                          "عدد المهندسين": q_eng, "إجمالي عدد العاملين": q_total,
+                          "المبلغ المنصرف من الموازنة الاستثمارية": q_budget,
+                          "عدد الاجتماعات الدورية": q_periodic, "عدد اجتماعات مجلس الإدارة": q_board,
+                          "عدد اجتماعات وحدة الفكر": q_think, "ملاحظات": q_notes}
                 result = save_or_update_row("البيانات_الربع_سنوية", QUARTERLY_COLUMNS, q_data, ["المعهد", "الربع", "السنة المالية"])
                 if result:
                     invalidate_all()
                     st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} البيانات")
-                    time.sleep(0.5)
-                    st.rerun()
+                    time.sleep(0.5); st.rerun()
         
-        # المدخلات النصف سنوية
+        # النصف سنوية
         if fp["is_half_month"]:
             st.divider()
             st.markdown(f"## 📊 المدخلات النصف سنوية — {fp['half']}")
@@ -1271,26 +1309,23 @@ if tab_input is not None:
             
             kp_h = f"{fp['half']}_{fp['fiscal_year']}".replace("/", "_").replace(" ", "_")
             c1, c2 = st.columns(2)
-            h_studies = c1.number_input("إجمالي دراسات الخطة البحثية المنجزة", min_value=0, value=hv("إجمالي عدد دراسات الخطة البحثية المنجزة"), key=f"h_st_{kp_h}")
+            h_studies = c1.number_input("إجمالي دراسات الخطة المنجزة", min_value=0, value=hv("إجمالي عدد دراسات الخطة البحثية المنجزة"), key=f"h_st_{kp_h}")
             h_outputs = c2.number_input("إجمالي المخرجات التطبيقية", min_value=0, value=hv("إجمالي عدد المخرجات التطبيقية من دراسات ومشروعات"), key=f"h_out_{kp_h}")
             h_revenue = st.number_input("إجمالي الإيرادات الذاتية", min_value=0.0, value=hvf("إجمالي مبلغ الإيرادات الذاتية"), format="%.2f", key=f"h_rev_{kp_h}")
             
             if st.button("💾 حفظ البيانات النصف سنوية", type="primary", key="save_h"):
-                h_data = {
-                    "المعهد": st.session_state.institute, "المستخدم": st.session_state.username,
-                    "النصف": fp["half"], "السنة المالية": fp["fiscal_year"],
-                    "إجمالي عدد دراسات الخطة البحثية المنجزة": h_studies,
-                    "إجمالي عدد المخرجات التطبيقية من دراسات ومشروعات": h_outputs,
-                    "إجمالي مبلغ الإيرادات الذاتية": h_revenue,
-                }
+                h_data = {"المعهد": st.session_state.institute, "المستخدم": st.session_state.username,
+                          "النصف": fp["half"], "السنة المالية": fp["fiscal_year"],
+                          "إجمالي عدد دراسات الخطة البحثية المنجزة": h_studies,
+                          "إجمالي عدد المخرجات التطبيقية من دراسات ومشروعات": h_outputs,
+                          "إجمالي مبلغ الإيرادات الذاتية": h_revenue}
                 result = save_or_update_row("البيانات_النصف_سنوية", HALF_COLUMNS, h_data, ["المعهد", "النصف", "السنة المالية"])
                 if result:
                     invalidate_all()
                     st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} البيانات")
-                    time.sleep(0.5)
-                    st.rerun()
+                    time.sleep(0.5); st.rerun()
         
-        # المدخلات السنوية
+        # السنوية
         if fp["is_annual_month"]:
             st.divider()
             st.markdown("## 📊 المدخلات السنوية")
@@ -1306,18 +1341,14 @@ if tab_input is not None:
                 except: return default
             
             a_patents = st.number_input("عدد براءات الاختراع", min_value=0, value=av("عدد براءات الاختراع"), key=f"a_pat_{fp['fiscal_year'].replace('/', '_')}")
-            
             if st.button("💾 حفظ البيانات السنوية", type="primary", key="save_a"):
-                a_data = {
-                    "المعهد": st.session_state.institute, "المستخدم": st.session_state.username,
-                    "السنة المالية": fp["fiscal_year"], "عدد براءات الاختراع": a_patents,
-                }
+                a_data = {"المعهد": st.session_state.institute, "المستخدم": st.session_state.username,
+                          "السنة المالية": fp["fiscal_year"], "عدد براءات الاختراع": a_patents}
                 result = save_or_update_row("البيانات_السنوية", ANNUAL_COLUMNS, a_data, ["المعهد", "السنة المالية"])
                 if result:
                     invalidate_all()
                     st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} البيانات")
-                    time.sleep(0.5)
-                    st.rerun()
+                    time.sleep(0.5); st.rerun()
         
         # المعاينة
         st.divider()
@@ -1334,34 +1365,36 @@ if tab_input is not None:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("📚 إجمالي الدراسات", kpi_preview["إجمالي الدراسات الجارية"])
         c2.metric("📄 إجمالي التقارير", kpi_preview["إجمالي التقارير"])
-        c3.metric("📋 إجمالي المقترحات", kpi_preview["إجمالي المقترحات"])
-        c4.metric("🤝 إجمالي الاجتماعات", kpi_preview["إجمالي الاجتماعات"])
+        c3.metric("📝 عدد المذكرات", kpi_preview["عدد المذكرات"])
+        c4.metric("📋 إجمالي المقترحات", kpi_preview["إجمالي المقترحات"])
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("🏃 أيام المأموريات", kpi_preview["إجمالي عدد الأيام الفعلية"])
-        c2.metric("👨‍🎓 المتدربين", kpi_preview["متدربين"])
-        c3.metric("📝 الأوراق المنشورة", kpi_preview["الأوراق المنشورة"])
-        c4.metric("🎓 الرسائل المنتهية", kpi_preview["الرسائل المنتهية"])
+        c2.metric("🔍 المعاينات", kpi_preview["إجمالي عدد المعاينات"])
+        c3.metric("👨‍🎓 المتدربين", kpi_preview["متدربين"])
+        c4.metric("🤝 الاجتماعات", kpi_preview["إجمالي الاجتماعات"])
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("📝 الأوراق المنشورة", kpi_preview["الأوراق المنشورة"])
+        c2.metric("⏳ الأوراق الجاري", kpi_preview["الأوراق الجاري العمل عليها"])
+        c3.metric("🎓 الرسائل المنتهية", kpi_preview["الرسائل المنتهية"])
+        c4.metric("⏳ الرسائل الجاري", kpi_preview["الرسائل الجاري العمل عليها"])
         
         with st.expander("📋 تفاصيل جميع المؤشرات"):
             detail_df = pd.DataFrame([kpi_preview]).T
-            detail_df.columns = ["القيمة"]
-            detail_df.index.name = "المؤشر"
+            detail_df.columns = ["القيمة"]; detail_df.index.name = "المؤشر"
             st.dataframe(detail_df, use_container_width=True)
         
         if st.button("💾 حفظ/تحديث مؤشرات الأداء الشهرية", type="primary", key="save_kpi"):
-            kpi_data = {
-                "المعهد": st.session_state.institute, "المستخدم": st.session_state.username,
-                "الشهر": month, "السنة": int(year),
-            }
+            kpi_data = {"المعهد": st.session_state.institute, "المستخدم": st.session_state.username,
+                        "الشهر": month, "السنة": int(year)}
             kpi_data.update(kpi_preview)
             result = save_or_update_row("KPI_Data", KPI_COLUMNS, kpi_data, ["المعهد", "الشهر", "السنة"])
             if result:
                 invalidate_all()
                 st.success(f"✅ تم {'تحديث' if result == 'updated' else 'حفظ'} مؤشرات الأداء")
                 st.balloons()
-                time.sleep(0.5)
-                st.rerun()
+                time.sleep(0.5); st.rerun()
         
         st.divider()
         st.markdown("## 📥 تصدير التقرير الشهري")
@@ -1374,13 +1407,12 @@ if tab_input is not None:
                         data=docx_bytes,
                         file_name=f"تقرير_{st.session_state.institute}_{month}_{year}.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key="dl_monthly"
-                    )
+                        key="dl_monthly")
                 except Exception as e:
                     st.error(f"خطأ: {e}")
 
 # ============================================================
-# 📊 Dashboard الشهري
+# Dashboard
 # ============================================================
 if 'tab_dash' in dir() and tab_dash is not None:
     with tab_dash:
@@ -1390,7 +1422,7 @@ if 'tab_dash' in dir() and tab_dash is not None:
             df_m = df_m[df_m["المعهد"] == st.session_state.institute]
         
         if df_m.empty:
-            st.info("📭 لا توجد بيانات - ابدأ بإدخال البيانات من تبويب (إدخال البيانات)")
+            st.info("📭 لا توجد بيانات")
         else:
             text_cols = ["المعهد", "المستخدم", "الشهر", "السنة"]
             for col in df_m.columns:
@@ -1407,9 +1439,9 @@ if 'tab_dash' in dir() and tab_dash is not None:
             
             st.divider()
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("🏃 المأموريات", int(df_m["إجمالي عدد المأموريات"].sum()))
-            c2.metric("🔍 المعاينات", int(df_m["إجمالي عدد المعاينات"].sum()))
-            c3.metric("📝 الأوراق", int(df_m["إجمالي الأوراق البحثية"].sum()))
+            c1.metric("📝 المذكرات", int(df_m["عدد المذكرات"].sum()))
+            c2.metric("🏃 المأموريات", int(df_m["إجمالي عدد المأموريات"].sum()))
+            c3.metric("🔍 المعاينات", int(df_m["إجمالي عدد المعاينات"].sum()))
             c4.metric("🎓 الرسائل", int(df_m["إجمالي الرسائل"].sum()))
             
             st.divider()
@@ -1423,27 +1455,17 @@ if 'tab_dash' in dir() and tab_dash is not None:
                     st.markdown("#### 📄 التقارير")
                     fig = px.bar(df_m, x="المعهد", y=["تقرير مرحلي", "تقرير نهائي", "تقرير معاينة", "تقرير معايرة"], barmode="stack")
                     st.plotly_chart(fig, use_container_width=True)
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown("#### 🤝 الاجتماعات")
-                    fig = px.bar(df_m, x="المعهد", y=["اجتماعات بالوزارة", "اجتماعات بالمركز", "اجتماعات جهات خارجية", "اجتماعات مع العاملين", "اجتماعات جهات أخرى"], barmode="stack")
-                    st.plotly_chart(fig, use_container_width=True)
-                with c2:
-                    st.markdown("#### 👥 التدريب")
-                    fig = px.bar(df_m, x="المعهد", y=["متدربين", "مدربين"], barmode="group")
-                    st.plotly_chart(fig, use_container_width=True)
             
             st.divider()
             st.markdown("### 📄 البيانات التفصيلية")
             st.dataframe(rtl_display(df_m), use_container_width=True, hide_index=True)
 
 # ============================================================
-# 📈 التقرير الربع سنوي
+# التقرير الربع سنوي
 # ============================================================
 if tab_q_dash is not None:
     with tab_q_dash:
         st.title("📈 التقرير الربع سنوي")
-        
         c1, c2, c3 = st.columns(3)
         with c1:
             sel_q = st.selectbox("الربع", ["الربع الأول", "الربع الثاني", "الربع الثالث", "الربع الرابع"], key="report_q")
@@ -1457,9 +1479,7 @@ if tab_q_dash is not None:
             else:
                 sel_inst = st.session_state.institute
         
-        fy_start = int(sel_fy.split("/")[0])
-        fy_end = int(sel_fy.split("/")[1])
-        
+        fy_start = int(sel_fy.split("/")[0]); fy_end = int(sel_fy.split("/")[1])
         if sel_q == "الربع الأول": q_months = [("يوليو", fy_start), ("أغسطس", fy_start), ("سبتمبر", fy_start)]
         elif sel_q == "الربع الثاني": q_months = [("أكتوبر", fy_start), ("نوفمبر", fy_start), ("ديسمبر", fy_start)]
         elif sel_q == "الربع الثالث": q_months = [("يناير", fy_end), ("فبراير", fy_end), ("مارس", fy_end)]
@@ -1471,10 +1491,8 @@ if tab_q_dash is not None:
         if kpi_df.empty:
             st.warning("لا توجد بيانات شهرية")
         else:
-            if sel_inst != "الكل":
-                kpi_df = kpi_df[kpi_df["المعهد"] == sel_inst]
-            elif st.session_state.role != "admin":
-                kpi_df = kpi_df[kpi_df["المعهد"] == st.session_state.institute]
+            if sel_inst != "الكل": kpi_df = kpi_df[kpi_df["المعهد"] == sel_inst]
+            elif st.session_state.role != "admin": kpi_df = kpi_df[kpi_df["المعهد"] == st.session_state.institute]
             
             mask = pd.Series([False] * len(kpi_df), index=kpi_df.index)
             for m, y in q_months:
@@ -1491,8 +1509,6 @@ if tab_q_dash is not None:
                 
                 st.markdown("## 📊 ملخص الربع")
                 agg = q_df.groupby("المعهد").sum(numeric_only=True).reset_index()
-                
-                st.subheader("🎯 المؤشرات الرئيسية")
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("📚 الدراسات", int(agg["إجمالي الدراسات الجارية"].sum()))
                 c2.metric("📄 التقارير", int(agg["إجمالي التقارير"].sum()))
@@ -1500,86 +1516,32 @@ if tab_q_dash is not None:
                 c4.metric("🤝 الاجتماعات", int(agg["إجمالي الاجتماعات"].sum()))
                 c5.metric("👨‍🎓 المتدربين", int(agg["متدربين"].sum()))
                 
-                df_q_data = load_sheet("البيانات_الربع_سنوية", QUARTERLY_COLUMNS)
-                if not df_q_data.empty and "الربع" in df_q_data.columns:
-                    df_q_data = df_q_data[(df_q_data["الربع"] == sel_q) & (df_q_data["السنة المالية"] == sel_fy)]
-                    if sel_inst != "الكل": df_q_data = df_q_data[df_q_data["المعهد"] == sel_inst]
-                    elif st.session_state.role != "admin": df_q_data = df_q_data[df_q_data["المعهد"] == st.session_state.institute]
-                    
-                    if not df_q_data.empty:
-                        st.markdown("## 👥 إحصائيات الكادر البحثي")
-                        for _, row in df_q_data.iterrows():
-                            with st.expander(f"🏢 {row['المعهد']}", expanded=True):
-                                c1, c2, c3, c4 = st.columns(4)
-                                c1.metric("👨‍🔬 الباحثين", row.get("عدد الباحثين", 0))
-                                c2.metric("🎓 الأساتذة", row.get("عدد الأساتذة بدون المتفرغين", 0))
-                                c3.metric("⚙️ المهندسين", row.get("عدد المهندسين", 0))
-                                c4.metric("👥 إجمالي العاملين", row.get("إجمالي عدد العاملين", 0))
-                                c1, c2, c3, c4 = st.columns(4)
-                                c1.metric("💰 المنصرف من الموازنة", f"{float(row.get('المبلغ المنصرف من الموازنة الاستثمارية', 0) or 0):.2f}")
-                                c2.metric("📅 اجتماعات دورية", row.get("عدد الاجتماعات الدورية", 0))
-                                c3.metric("🏛️ مجلس الإدارة", row.get("عدد اجتماعات مجلس الإدارة", 0))
-                                c4.metric("💡 وحدة الفكر", row.get("عدد اجتماعات وحدة الفكر", 0))
-                
-                half_to_show = None
-                if sel_q == "الربع الثاني": half_to_show = "النصف الأول"
-                elif sel_q == "الربع الرابع": half_to_show = "النصف الثاني"
-                
-                if half_to_show:
-                    st.markdown(f"## 📊 البيانات النصف سنوية — {half_to_show}")
-                    df_h = load_sheet("البيانات_النصف_سنوية", HALF_COLUMNS)
-                    if not df_h.empty and "النصف" in df_h.columns:
-                        df_h = df_h[(df_h["السنة المالية"] == sel_fy) & (df_h["النصف"] == half_to_show)]
-                        if sel_inst != "الكل": df_h = df_h[df_h["المعهد"] == sel_inst]
-                        elif st.session_state.role != "admin": df_h = df_h[df_h["المعهد"] == st.session_state.institute]
-                        if not df_h.empty:
-                            for _, row in df_h.iterrows():
-                                with st.expander(f"🏢 {row['المعهد']}", expanded=False):
-                                    c1, c2, c3 = st.columns(3)
-                                    c1.metric("📚 الدراسات المنجزة", row.get("إجمالي عدد دراسات الخطة البحثية المنجزة", 0))
-                                    c2.metric("🔬 المخرجات التطبيقية", row.get("إجمالي عدد المخرجات التطبيقية من دراسات ومشروعات", 0))
-                                    c3.metric("💰 الإيرادات الذاتية", f"{float(row.get('إجمالي مبلغ الإيرادات الذاتية', 0) or 0):.2f}")
-                
-                if sel_q == "الربع الرابع":
-                    st.markdown("## 📊 البيانات السنوية")
-                    df_a = load_sheet("البيانات_السنوية", ANNUAL_COLUMNS)
-                    if not df_a.empty and "السنة المالية" in df_a.columns:
-                        df_a = df_a[df_a["السنة المالية"] == sel_fy]
-                        if sel_inst != "الكل": df_a = df_a[df_a["المعهد"] == sel_inst]
-                        elif st.session_state.role != "admin": df_a = df_a[df_a["المعهد"] == st.session_state.institute]
-                        if not df_a.empty:
-                            for _, row in df_a.iterrows():
-                                with st.expander(f"🏢 {row['المعهد']}", expanded=False):
-                                    st.metric("🔬 براءات الاختراع", row.get("عدد براءات الاختراع", 0))
-                
                 st.divider()
                 st.markdown("## 📄 الجدول الشامل")
                 st.dataframe(rtl_display(q_df), use_container_width=True, hide_index=True)
                 
                 st.divider()
-                st.markdown("## 📥 تصدير التقرير الربع سنوي")
+                st.markdown("## 📥 تصدير التقرير")
                 if st.button("📄 توليد التقرير (Word)", key="gen_quarterly_docx"):
                     with st.spinner("جاري التوليد..."):
                         try:
                             inst_to_report = st.session_state.institute if st.session_state.role != "admin" or sel_inst == "الكل" else sel_inst
                             docx_bytes = generate_quarterly_report(inst_to_report, sel_q, sel_fy)
                             st.download_button(
-                                label="⬇️ تحميل التقرير الربع سنوي",
+                                label="⬇️ تحميل التقرير",
                                 data=docx_bytes,
                                 file_name=f"تقرير_{inst_to_report}_{sel_q}_{sel_fy}.docx".replace("/", "_"),
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key="dl_quarterly"
-                            )
+                                key="dl_quarterly")
                         except Exception as e:
                             st.error(f"خطأ: {e}")
 
 # ============================================================
-# 📅 التقرير السنوي
+# التقرير السنوي
 # ============================================================
 if tab_annual is not None:
     with tab_annual:
         st.title("📅 التقرير السنوي")
-        
         c1, c2 = st.columns(2)
         with c1:
             annual_fy = st.selectbox("السنة المالية", ["2025/2026", "2026/2027", "2027/2028"], key="annual_fy")
@@ -1592,15 +1554,11 @@ if tab_annual is not None:
                 annual_inst = st.session_state.institute
         
         st.markdown("## 📊 معاينة البيانات السنوية")
-        fy_start = int(annual_fy.split("/")[0])
-        fy_end = int(annual_fy.split("/")[1])
-        fy_months_all = [
-            ("يوليو", fy_start), ("أغسطس", fy_start), ("سبتمبر", fy_start),
-            ("أكتوبر", fy_start), ("نوفمبر", fy_start), ("ديسمبر", fy_start),
-            ("يناير", fy_end), ("فبراير", fy_end), ("مارس", fy_end),
-            ("أبريل", fy_end), ("مايو", fy_end), ("يونيو", fy_end),
-        ]
-        
+        fy_start = int(annual_fy.split("/")[0]); fy_end = int(annual_fy.split("/")[1])
+        fy_months_all = [("يوليو", fy_start), ("أغسطس", fy_start), ("سبتمبر", fy_start),
+                         ("أكتوبر", fy_start), ("نوفمبر", fy_start), ("ديسمبر", fy_start),
+                         ("يناير", fy_end), ("فبراير", fy_end), ("مارس", fy_end),
+                         ("أبريل", fy_end), ("مايو", fy_end), ("يونيو", fy_end)]
         kpi_ann = load_sheet("KPI_Data", KPI_COLUMNS)
         if kpi_ann.empty:
             st.warning("لا توجد بيانات")
@@ -1620,9 +1578,7 @@ if tab_annual is not None:
                 for col in ann_df.columns:
                     if col not in text_cols:
                         ann_df[col] = pd.to_numeric(ann_df[col], errors="coerce").fillna(0)
-                
                 agg_ann = ann_df.groupby("المعهد").sum(numeric_only=True).reset_index()
-                st.subheader("🎯 ملخص المؤشرات السنوية")
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("📚 الدراسات", int(agg_ann["إجمالي الدراسات الجارية"].sum()))
                 c2.metric("📄 التقارير", int(agg_ann["إجمالي التقارير"].sum()))
@@ -1637,19 +1593,17 @@ if tab_annual is not None:
                         try:
                             inst_to_export = annual_inst if annual_inst != "الكل" else st.session_state.institute
                             xlsx_bytes = generate_annual_report_excel(inst_to_export, annual_fy)
-                            fname = f"تقرير_سنوي_{inst_to_export}_{annual_fy}.xlsx".replace("/", "_")
                             st.download_button(
                                 label="⬇️ تحميل التقرير السنوي",
                                 data=xlsx_bytes,
-                                file_name=fname,
+                                file_name=f"تقرير_سنوي_{inst_to_export}_{annual_fy}.xlsx".replace("/", "_"),
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key="dl_annual"
-                            )
+                                key="dl_annual")
                         except Exception as e:
                             st.error(f"خطأ: {e}")
 
 # ============================================================
-# 📄 البيانات
+# البيانات
 # ============================================================
 if tab_data is not None:
     with tab_data:
@@ -1657,11 +1611,9 @@ if tab_data is not None:
         kpi_df = load_sheet("KPI_Data", KPI_COLUMNS)
         if not kpi_df.empty and st.session_state.role != "admin" and "المعهد" in kpi_df.columns:
             kpi_df = kpi_df[kpi_df["المعهد"] == st.session_state.institute]
-        
         if kpi_df.empty:
             st.info("📭 لا توجد بيانات")
         else:
-            st.markdown("### 📊 بيانات KPI الشهرية")
             st.dataframe(rtl_display(kpi_df), use_container_width=True, hide_index=True)
             def to_excel(d):
                 out = BytesIO()
@@ -1673,23 +1625,19 @@ if tab_data is not None:
                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ============================================================
-# 🔧 تشخيص
+# تشخيص
 # ============================================================
 if tab_debug is not None:
     with tab_debug:
         st.title("🔧 تشخيص البيانات")
-        st.markdown("### 📋 حالة الأوراق")
         sheets_to_check = ["KPI_Data", "البيانات_الربع_سنوية", "البيانات_النصف_سنوية", "البيانات_السنوية"] + list(MONTHLY_LISTS.keys())
         for sname in sheets_to_check:
             try:
                 all_v = fetch_data(sname)
                 rows_count = max(0, len(all_v) - 1) if all_v else 0
-                status = "✅" if rows_count > 0 else "⚠️"
-                st.write(f"{status} **{sname}** — {rows_count} صف بيانات")
+                st.write(f"{'✅' if rows_count > 0 else '⚠️'} **{sname}** — {rows_count} صف")
             except Exception as e:
                 st.write(f"❌ **{sname}** — خطأ: {e}")
-        
         st.divider()
-        st.write(f"**data_bust:** {st.session_state.get('data_bust', 0)}")
         st.write(f"**آخر حفظ:** {st.session_state.get('last_save_time', 'لا يوجد')}")
         st.write(f"**الوقت الحالي (+3):** {get_local_time()}")
